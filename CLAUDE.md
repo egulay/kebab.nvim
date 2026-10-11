@@ -267,6 +267,18 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **lazy.nvim replaces `init`, it does not chain it.** Declaring `init` on the
+  neo-tree fragment silently dropped LazyVim's, whose autocmd is what opens the
+  tree for `nvim <dir>` -- so a directory argument gave one plain window and no
+  explorer, while `nvim <file>` looked fine. `explorer.setup` owns both
+  triggers now. The same hazard applies to any `init`/`config` this layer adds
+  to a plugin LazyVim already configures.
+- **`VimEnter` has not fired while `-c` commands run**, and under `--headless`
+  it may never fire -- so a probe `-c`'d into a session sees `v:vim_did_enter`
+  as 0. Hook `BufEnter` (which is what LazyVim does here) or both.
+- `vim.o.diff` is **false during the first file's BufReadPost**: diff mode is
+  turned on afterwards. A guard read at call time always passed, so `nvim -d a
+  b` got a tree alongside the diff. Check it inside the `vim.schedule`.
 - A Gradle build file cannot be blanked with a **pattern**: the first `//` on
   `maven { url = uri("https://repo.spring.io/milestone") }` is inside a string,
   and blanking from there erased that line's closing brace -- so the brace
