@@ -1,0 +1,83 @@
+-- Helpers for the `build` functions in lua/kebab/languages/*.lua.
+--
+-- Separate from project.lua so a language definition can require it without a
+-- cycle: project.lua pulls the languages in through the registry, so a language
+-- cannot require project.lua back.
+local M = {}
+
+---Run shell steps one after another, stopping at the first failure, then call
+---done(ok, err). Each step is { cmd = {...}, label?, cwd? }.
+---@param steps table[]
+---@param cwd string
+---@param done fun(ok:boolean, err?:string)
+function M.run_steps(steps, cwd, done)
+  local i = 0
+  local function next_step()
+    i = i + 1
+    local step = steps[i]
+    if not step then
+      return done(true)
+    end
+    -- vim.system throws ENOENT for a missing executable instead of returning
+    -- a code, which would abort the scaffold with a stack trace and never call
+    -- `done`. project.create checks a type's declared `requires` up front;
+    -- this catches anything a build step runs beyond those.
+    if vim.fn.executable(step.cmd[1]) == 0 then
+      local msg = ("%s is not installed, so %s cannot run")
+        :format(step.cmd[1], step.label or step.cmd[1])
+      vim.notify(msg, vim.log.levels.ERROR)
+      return done(false, msg)
+    end
+    vim.notify("… " .. (step.label or step.cmd[1]))
+    vim.system(step.cmd, { cwd = step.cwd or cwd, text = true }, function(res)
+      vim.schedule(function()
+        if res.code ~= 0 then
+          local msg = ("%s failed (%d)\n%s"):format(
+            step.label or step.cmd[1], res.code, (res.stderr or "") .. (res.stdout or ""))
+          vim.notify(msg, vim.log.levels.ERROR)
+          return done(false, msg)
+        end
+        next_step()
+      end)
+    end)
+  end
+  next_step()
+end
+
+---Write `lines` to `path`, creating parent directories.
+---@param path string
+---@param lines string[]
+function M.write_file(path, lines)
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  vim.fn.writefile(lines, path)
+end
+
+---mkdir -p
+function M.mkdir(path)
+  vim.fn.mkdir(path, "p")
+end
+
+---The directory a scaffold should run *in*, for tools that create the project
+---directory themselves (`flutter create`, `cargo new`, `npm create vite`).
+function M.parent_of(dest)
+  return vim.fn.fnamemodify(dest, ":h")
+end
+
+---The last path component, which is what such tools are given as the name.
+function M.leaf_of(dest)
+  return vim.fn.fnamemodify(dest, ":t")
+end
+
+---A project name reduced to what a given ecosystem allows.
+---@param name string
+---@param style "snake"|"kebab"|"plain"
+function M.sanitise(name, style)
+  if style == "snake" then
+    return (name:gsub("[^%w_]", "_"):lower())
+  elseif style == "kebab" then
+    return (name:gsub("[^%w%-]", "-"):lower())
+  end
+  return (name:gsub("[^%w_%-]", "-"))
+end
+
+return M

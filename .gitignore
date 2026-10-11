@@ -1,0 +1,5 @@
+*.bak.*
+.DS_Store
+
+# agent scratch; may quote file contents, so never publish it
+.claude/

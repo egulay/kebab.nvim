@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+#
+# push -- stage everything, commit, and push kebab.nvim to GitHub.
+#
+#   ./push "commit message"
+#   ./push --dry-run "commit message"    show what would happen, change nothing
+#   ./push --amend "better message"      amend the last commit instead
+#
+# Honours .gitignore. Sets up the remote and git credentials on first run.
+
+set -euo pipefail
+
+REMOTE_URL="https://github.com/egulay/kebab.nvim.git"
+REMOTE_NAME="origin"
+
+RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; OFF=$'\e[0m'
+say()  { printf '%s%s%s\n' "$BOLD" "$*" "$OFF"; }
+ok()   { printf '%s✓%s %s\n' "$GREEN" "$OFF" "$*"; }
+warn() { printf '%s!%s %s\n' "$YELLOW" "$OFF" "$*"; }
+die()  { printf '%s✗%s %s\n' "$RED" "$OFF" "$*" >&2; exit 1; }
+
+DRY=0
+AMEND=0
+MESSAGE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run|-n) DRY=1; shift ;;
+    --amend)      AMEND=1; shift ;;
+    -h|--help)    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*)           die "unknown option: $1" ;;
+    *)            MESSAGE="$1"; shift ;;
+  esac
+done
+
+[[ -n "$MESSAGE" ]] || die 'a commit message is required:  ./push "what changed"'
+
+# always operate on the repo this script lives in, not the caller's cwd
+cd "$(dirname "$(readlink -f "$0")")"
+git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository: $PWD"
+say "repo: $PWD"
+
+# ---------------------------------------------------------------- remote
+if ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+  if (( DRY )); then
+    warn "would add remote $REMOTE_NAME -> $REMOTE_URL"
+  else
+    git remote add "$REMOTE_NAME" "$REMOTE_URL"
+    ok "added remote $REMOTE_NAME -> $REMOTE_URL"
+  fi
+else
+  current="$(git remote get-url "$REMOTE_NAME")"
+  if [[ "$current" != "$REMOTE_URL" && "$current" != "git@github.com:egulay/kebab.nvim.git" ]]; then
+    die "remote $REMOTE_NAME is $current, expected $REMOTE_URL
+     fix it with: git remote set-url $REMOTE_NAME $REMOTE_URL"
+  fi
+fi
+
+# ------------------------------------------------------------ credentials
+# An https remote needs a credential helper or the push just fails. gh can
+# provide one, and it is already authenticated on this machine.
+EFFECTIVE_URL="$(git remote get-url "$REMOTE_NAME" 2>/dev/null || echo "$REMOTE_URL")"
+if [[ "$EFFECTIVE_URL" == https://* ]]; then
+  if [[ -z "$(git config --get credential.helper || true)" ]]; then
+    if command -v gh >/dev/null 2>&1; then
+      if (( DRY )); then
+        warn "would run: gh auth setup-git   (no credential.helper configured)"
+      else
+        gh auth setup-git && ok "configured git credentials via gh"
+      fi
+    else
+      warn "no credential.helper and no gh; the push may prompt or fail.
+     Either install gh, or switch to ssh:
+       git remote set-url $REMOTE_NAME git@github.com:egulay/kebab.nvim.git"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------- branch
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$BRANCH" == "HEAD" ]]; then
+  die "detached HEAD; check out a branch first"
+fi
+
+# GitHub repos default to main. Renaming now, while nothing has been pushed,
+# avoids ending up with both a master and a main branch on the remote.
+if [[ "$BRANCH" == "master" ]] && ! git rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+  if (( DRY )); then
+    warn "would rename branch master -> main (nothing pushed yet)"
+    BRANCH="main"
+  else
+    git branch -M main
+    BRANCH="main"
+    ok "renamed branch master -> main"
+  fi
+fi
+say "branch: $BRANCH"
+
+# ----------------------------------------------------------------- stage
+if (( DRY )); then
+  echo
+  say "would stage (git add -A):"
+  git add -A --dry-run | sed 's/^/  /' || true
+else
+  git add -A
+fi
+
+# ---------------------------------------------------------------- commit
+if (( AMEND )); then
+  if (( DRY )); then
+    warn "would amend the last commit with: $MESSAGE"
+  else
+    git commit --amend -m "$MESSAGE"
+    ok "amended: $MESSAGE"
+  fi
+else
+  # --dry-run never stages, so look at the worktree instead of the index
+  if (( DRY )); then
+    PENDING="$(git status --porcelain)"
+  else
+    PENDING="$(git diff --cached --name-only)"
+  fi
+
+  if [[ -z "$PENDING" ]]; then
+    warn "nothing to commit"
+    if git rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 \
+       && [[ -z "$(git log '@{upstream}..HEAD' --oneline 2>/dev/null)" ]]; then
+      ok "remote already up to date; nothing to do"
+      exit 0
+    fi
+    say "pushing existing commits anyway"
+  else
+    echo
+    if (( DRY )); then
+      say "would commit:"
+      git status --short | sed 's/^/  /'
+      warn "with message: $MESSAGE"
+    else
+      say "staged changes:"
+      git diff --cached --stat | sed 's/^/  /'
+      git commit -q -m "$MESSAGE"
+      ok "committed: $MESSAGE"
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------------ push
+echo
+if (( DRY )); then
+  warn "would run: git push -u $REMOTE_NAME $BRANCH"
+  say "dry run complete -- nothing was changed"
+  exit 0
+fi
+
+say "pushing to $REMOTE_NAME/$BRANCH ..."
+if git push -u "$REMOTE_NAME" "$BRANCH"; then
+  ok "pushed"
+else
+  # The usual cause on a first push: the GitHub repo was created with a
+  # README/LICENSE, so it has a commit this branch has never seen. Rebase
+  # onto it rather than force-pushing, which would throw that commit away.
+  echo
+  warn "push rejected -- the remote has commits this branch does not have"
+  git fetch "$REMOTE_NAME" "$BRANCH"
+
+  if git merge-base HEAD "$REMOTE_NAME/$BRANCH" >/dev/null 2>&1; then
+    say "rebasing onto $REMOTE_NAME/$BRANCH ..."
+  else
+    say "the remote was initialised separately (no shared history); rebasing onto it ..."
+  fi
+
+  # rebase, unlike merge, does not need --allow-unrelated-histories: with no
+  # common ancestor it simply replays every local commit onto the remote tip
+  if git pull --rebase "$REMOTE_NAME" "$BRANCH"; then
+    git push -u "$REMOTE_NAME" "$BRANCH"
+    ok "pushed"
+  else
+    die "the rebase stopped, most likely on a conflict.
+     Resolve the files it lists, then:
+       git add <files> && git rebase --continue && ./push \"$MESSAGE\"
+     Or back out entirely with:
+       git rebase --abort"
+  fi
+fi
+echo "   https://github.com/egulay/kebab.nvim/tree/$BRANCH"

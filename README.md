@@ -1,0 +1,338 @@
+# kebab.nvim
+
+A lightweight IDE layer for [LazyVim](https://lazyvim.github.io), built so a
+full graphical IDE is no longer needed for day-to-day work — without giving up
+the terminal.
+
+It is a plugin spec collection, not a Neovim distribution: LazyVim stays in
+charge, this adds the IDE on top.
+
+## What it gives you
+
+- **Languages**: Java/Spring Boot, Kotlin, Python, Ruby, JavaScript *and*
+  TypeScript, Svelte/Tailwind, Dart/Flutter, Go, Rust, SQL, Docker,
+  YAML/JSON/TOML, Markdown — language servers, debuggers, test runners and formatters installed
+  automatically through Mason.
+- **One file per language.** Everything the layer knows about a stack — its
+  project markers, scaffolds, Mason packages, LazyVim extras, run
+  configurations, dependency command, file templates — is declared in one
+  `lua/kebab/languages/*.lua`. Adding a language is adding a file, and a user
+  can add or override one from their own config without touching the repo.
+- **Spring Boot**: `application.yml` completion against your own beans, bean and
+  request-mapping navigation, library sources on go-to-definition.
+- **Flutter**: device picker, emulator launch, hot reload/restart, dev log.
+- **Run configurations**: Maven, Flutter, Python and npm tasks, plus any
+  `.vscode/launch.json` the project ships.
+- **Add a dependency** without leaving the editor: a Maven coordinate goes into
+  `pom.xml` (omitting the version when Spring Boot's parent already manages it),
+  Gradle's `dependencies { }` block is edited the same way, in Kotlin or Groovy
+  dialect; the rest hand off to `flutter pub add`, `npm install`, `uv add`,
+  `cargo add`, `go get` or `bundle add`.
+- **Generate code** the way a graphical IDE does: constructor, getters and
+  setters, `toString`, `equals`/`hashCode`, override methods, delegates.
+- **File templates** that fill in the Java package from the directory, and put a
+  JUnit test under `src/test/java` with the same package.
+- **Scratch files** — `.http`, `.sql` and one per language — kept outside the
+  project as real files, so a language server attaches and they survive a
+  restart.
+- **Project file generators**: a `.gitignore`, Dockerfile and CI workflow for
+  the language in hand, plus `.editorconfig`.
+- **Per-project run configurations** in `.kebab/run.json`, with args and env,
+  committed so your team gets them too.
+- **Follow external edits** (`<leader>uf`): when something outside the editor
+  changes a file — an AI agent working in the project, say — the view moves to
+  the line that changed. Off by default, yields to your own typing, and never
+  reloads over unsaved changes.
+- **Projects**: create from a wizard or scaffold into the folder you are already
+  in; open any project found under your usual roots — from inside the editor or
+  from the shell with the `kebab` command.
+- **An always-on project tree** on the left, open by default rather than toggled.
+- **Right-click menus** — Project / File / Edit / Code / Run / Git / View — each
+  entry showing its keybinding, so the menu teaches the shortcut. Mouse and
+  keyboard are both first-class: every entry has a shortcut, and the Edit menu
+  carries a command palette for finding things by name.
+- **SQL, over JDBC**: saved connections, a table browser, query consoles and
+  completion that knows your tables, columns and their types. Drivers are
+  downloaded from Maven Central on first use, so a database needs no `psql` or
+  `mysql` binary installed — only a JDK. Nine databases out of the box.
+- **Git**: lazygit, inline hunks, side-by-side diff and 3-way merge, and a
+  Revert that discards tracked changes *and* deletes untracked files, rather
+  than silently ignoring the untracked ones the way `git checkout` does.
+
+## Requirements
+
+Run **`kebab doctor`** — it groups everything by who owns the version, says
+what each missing tool costs you, and prints the command to install it using
+whatever package manager this machine has. It exits non-zero only when
+something genuinely **required** is absent, so it is safe in a script.
+
+| | |
+|---|---|
+| **Required** | Neovim 0.11+ with a LazyVim config, `git`, `curl` |
+| **Per language** | a JDK, Maven/Gradle, Node, Python, Go, Rust, Ruby, Flutter — only the ones you use |
+| **Optional** | `javac` (the SQL editor), `unzip` (the Spring scaffold), `jq` (readable config files), `inotify-tools` (`:IdeFollow`), `lazygit` |
+
+Nothing is bundled, on purpose. Two reasons:
+
+- **31 of the 55 Mason packages install *through* a toolchain** — 14 via npm, 9
+  via go, 4 via gem, 4 via pip. Bundling those away would mean shipping a Node,
+  a Go, a Ruby and a Python, which is a distribution, not a plugin.
+- **A bundled JDK would break Java.** `jdk.lua` discovers every JDK on the
+  machine and hands them all to `jdtls`, so each project compiles against its
+  own target. Pinning one version would silently index older projects wrongly.
+
+What *is* automatic: the 55 Mason packages, the plugins, and JDBC drivers from
+Maven Central. Those are editor infrastructure — no project cares which version
+they are.
+
+## Install
+
+Add one spec to your LazyVim config:
+
+```lua
+-- ~/.config/nvim/lua/plugins/kebab.lua
+return {
+  { "egulay/kebab.nvim", import = "kebab.plugins" },
+}
+```
+
+Restart Neovim. Mason installs the tooling on first launch; `jdtls` takes about
+a minute to index a Maven project the first time.
+
+### Local development
+
+```lua
+-- ~/.config/nvim/lua/config/lazy.lua
+dev = { path = "~/Projects", fallback = true },
+```
+
+```lua
+-- ~/.config/nvim/lua/plugins/kebab.lua
+return { { "egulay/kebab.nvim", dev = true, import = "kebab.plugins" } }
+```
+
+Clone to `~/Projects/kebab.nvim` and edits apply on the next start.
+
+## The `kebab` command
+
+`bin/kebab` opens and creates projects from the shell, so the IDE starts the way
+`code .` does rather than only from inside Neovim.
+
+```bash
+ln -s ~/Projects/kebab.nvim/bin/kebab ~/.local/bin/kebab
+```
+
+```bash
+kebab                     # open the IDE here, project tree showing
+kebab ~/Projects/thing    # open that directory
+kebab open                # pick a project from your roots
+kebab open alpha           # open it by name; offers a choice if ambiguous
+kebab new                 # create a project, asking as it goes
+kebab new demo-api --type spring --group io.gulay --deps web,data-jpa
+kebab new thing --type go --module github.com/you/thing
+kebab new app --type node --language javascript
+kebab new demo --type empty --no-open   # create it and stop, for scripts
+kebab list                # every project found under your roots
+kebab types               # what can be created, and what each needs installed
+kebab types --prompts     # ...and what each one asks you
+kebab doctor              # check the install
+```
+
+Any question a project type asks is settable as `--name value`, so a language
+that adds a prompt needs no change to the script — `kebab types --prompts` lists
+them, generated from the declarations themselves. An answer the chosen type does
+not ask for is reported rather than ignored, so a typo does not look like it
+worked.
+
+Project roots default to `~/Projects`, `~/src`, `~/code` and
+`~/dev`. Override with `KEBAB_PROJECT_ROOTS` (colon separated) or
+`vim.g.kebab_project_roots`. `KEBAB_DRY_RUN=1` prints the Lua a command would
+run instead of running it.
+
+## Databases
+
+Shaped like a dedicated database IDE: add a data source once, then browse it
+and query it.
+Connections are JDBC, and the driver is fetched from Maven Central the first
+time you use it.
+
+| | |
+|---|---|
+| `<leader>DD` | Database explorer |
+| `<leader>Da` | Add a connection (asks, then tests it) |
+| `<leader>Dt` | Browse tables, open one to see its rows |
+| `<leader>Dq` | New SQL console bound to a connection |
+| `<leader>Dc` | Attach a connection to this buffer |
+| `<leader>S` | Run the statement under the cursor |
+
+Queries run against a process that is kept warm per connection, so the first
+costs about 180ms and every one after it about 0.2ms. `:IdeDbStatus` reports
+what is running; `:IdeDbDisconnect` closes them.
+
+PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle, H2, DuckDB and
+ClickHouse are registered. Add your own:
+
+```lua
+vim.g.kebab_jdbc_drivers = {
+  { key = "firebird", label = "Firebird",
+    coords = { "org.firebirdsql.jdbc:jaybird" },
+    url = "jdbc:firebirdsql://{host}:{port}/{database}", default_port = 3050 },
+}
+```
+
+Connections live in `stdpath("data")/kebab/connections.json`, mode 0600, never
+in the project. **A password is never stored** — a connection names an
+environment variable to read it from:
+
+```json
+{ "connections": [
+  { "name": "prod", "url": "jdbc:postgresql://db:5432/shop",
+    "user": "ada", "password_env": "SHOP_DB_PASSWORD" }
+] }
+```
+
+Completion knows tables, `customers.` → that table's columns with their types,
+and aliases (`select c. from customers c`). It is a separate blink source from
+`vim-dadbod-completion`, which covers table prefixes and aliases but not the
+bare table list or `table.`.
+
+## Adding a language
+
+A language is one file. This is the whole of what makes Go work:
+
+```lua
+-- lua/kebab/languages/go.lua
+return {
+  key = "go",
+  label = "Go",
+  markers = { { file = "go.mod", kind = "go", deps = { command = function(pkg)
+    return { "go", "get", pkg }
+  end } } },
+  extras = { "lazyvim.plugins.extras.lang.go" },
+  tools = { "gopls", "delve", "gofumpt" },
+  tasks = { { name = "go: test ./...", cmd = { "go" }, args = { "test", "./..." },
+             desc = "Run all tests", marker = "go.mod" } },
+  project_types = { … },   -- what :IdeNewProject offers
+  templates = { … },       -- what :IdeNewFile offers
+  project_files = { … },   -- what :IdeProjectFile offers
+  scratch = { … },         -- what :IdeScratch offers
+  codegen = { … },         -- what :IdeGenerate offers
+}
+```
+
+From your own config, without forking anything:
+
+```lua
+-- add one, or override a field of a built-in one
+vim.g.kebab_languages = {
+  { key = "zig", label = "Zig", markers = { { file = "build.zig", kind = "zig" } },
+    tools = { "zls" } },
+  { key = "go", label = "Go (my way)" },   -- merged over the built-in
+}
+
+-- or drop one entirely
+vim.g.kebab_disabled_languages = { "dart" }
+```
+
+`require("kebab.registry").register({ … })` does the same thing in Lua.
+
+## Semantic queries, for a script or an agent
+
+An AI agent working in a repository already has file I/O, grep and a shell.
+What it cannot get from those is what the language server knows. These expose
+exactly that, and **nothing here writes to the working tree** — an agent driving
+them unattended cannot damage anything.
+
+```bash
+kebab diagnostics src/Main.java          # did my edit break something?
+kebab definition  src/Main.java:42:18    # where is this defined?
+kebab references  src/Main.java:42:18    # who calls it?
+kebab symbols     src/Main.java          # what is in this file?
+kebab hover       src/Main.java:42:18    # what type is it?
+```
+
+Output is `file:line:col: …`, so it is greppable and an editor can jump to it.
+Add `--json` for a machine-readable answer, and `--exit-code` to make
+`diagnostics` fail when it finds an error — the shape a pre-commit check wants:
+
+```bash
+kebab diagnostics src/Main.java --json
+# {"ok":true,"command":"diagnostics","count":1,"clients":["gopls"],
+#  "diagnostics":[{"line":11,"col":6,"severity":"error",
+#                  "source":"compiler","message":"declared and not used: unused"}]}
+```
+
+The exit code says whether the *query* worked, not what it found. Finding errors
+is a successful query; `--exit-code` opts into the other behaviour.
+
+### Keeping it warm
+
+A one-shot query boots Neovim and waits for a language server: about **250ms**
+for `gopls`, but jdtls needs up to **150s** to import a Maven project. For
+anything more than an occasional question, keep an instance up:
+
+```bash
+kebab serve &                                      # listens on $XDG_RUNTIME_DIR/kebab.sock
+kebab --server /run/user/1000/kebab.sock diagnostics src/Main.java
+```
+
+That is **~15ms** a query instead of 250ms, and jdtls indexes once rather than
+per call. It uses Neovim's own `--listen`/`--remote-expr`, so there is no daemon
+of ours in the picture.
+
+Two things to know: a unix socket path is limited to about 108 bytes (`serve`
+refuses a longer one rather than failing to bind silently), and **a warm
+instance holds the code it started with** — restart it after editing the layer.
+
+## Tests
+
+```bash
+./tests/run.sh            # everything
+./tests/run.sh project    # only specs whose name contains "project"
+KEBAB_TEST_KEEP=1 ./tests/run.sh   # keep the scratch directory for inspection
+```
+
+The suite runs inside one headless Neovim loaded from your real config, so the
+plugins it checks are the ones that actually ship. It asserts on effects — files
+created, a window opened, a file reverted — rather than on modules loading, and
+it never touches a file outside its own scratch directory.
+
+## Keymaps
+
+See [CHEATSHEET.md](CHEATSHEET.md). Leader is `Space`; press it and wait for
+which-key. The quickest way in:
+
+| | |
+|---|---|
+| `<leader>pn` | New project |
+| `<leader>po` | Open project |
+| `<leader>pk` | The cheatsheet |
+| `<leader>M` | Menu (or right-click anywhere) |
+| `<leader>oo` | Run a task |
+| `<leader>pd` | Add a dependency |
+| `<leader>cg` | Generate code |
+| `<leader>fN` | New file from a template |
+| `<leader>or` | Run configuration |
+| `<leader>uf` | Follow external edits |
+| `<leader>pD` | Doctor |
+| `<leader>sC` | Command palette |
+
+## Publishing
+
+```bash
+./push "what changed"          # stage everything, commit, push
+./push --dry-run "what changed"  # show what would happen, change nothing
+./push --amend "better message"  # amend the last commit instead
+```
+
+It honours `.gitignore`, and on first run adds the `origin` remote, configures
+git credentials through `gh`, and renames `master` to `main`.
+
+## Design notes
+
+[DESIGN.md](DESIGN.md) explains each module and the decisions behind it.
+[BACKLOG.md](BACKLOG.md) is what is deliberately not done yet.
+
+## Licence
+
+MIT

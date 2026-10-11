@@ -1,0 +1,500 @@
+-- JDBC: drivers from Maven Central, connections over JDBC.
+--
+-- The pure logic is tested unconditionally. The parts that need the network or
+-- a JVM run against a real SQLite database and skip with a reason when the
+-- machine cannot do it, rather than pretending.
+local H = ...
+local J = require("kebab.jdbc")
+
+H.describe("the driver registry", function()
+  H.it("covers the databases worth covering", function()
+    local keys = vim.tbl_map(function(d) return d.key end, J.drivers())
+    for _, want in ipairs({ "postgresql", "mysql", "mariadb", "sqlite", "sqlserver", "oracle", "h2", "duckdb", "clickhouse" }) do
+      H.ok(vim.tbl_contains(keys, want), want .. " should have a driver")
+    end
+  end)
+
+  H.it("gives every driver a label, coordinates and a URL template", function()
+    for _, d in ipairs(J.drivers()) do
+      H.ok(type(d.label) == "string" and d.label ~= "", d.key .. " needs a label")
+      H.ok(type(d.coords) == "table" and #d.coords > 0, d.key .. " needs Maven coordinates")
+      H.ok(type(d.url) == "string" and d.url:match("^jdbc:"), d.key .. " needs a jdbc: URL template")
+      for _, coord in ipairs(d.coords) do
+        local group, artifact = J.parse_coord(coord)
+        H.ok(group and artifact, ("%s has a malformed coordinate %q"):format(d.key, coord))
+      end
+    end
+  end)
+
+  H.it("gives a file-backed driver no port, and a server-backed one a port", function()
+    for _, d in ipairs(J.drivers()) do
+      if d.file then
+        H.ok(d.url:match("{file}"), d.key .. " is file-backed so its URL needs {file}")
+      else
+        H.ok(d.default_port, d.key .. " should have a default port")
+        H.ok(d.url:match("{host}"), d.key .. " needs {host}")
+      end
+    end
+  end)
+
+  H.it("names mysql's transitive dependency, which is needed at runtime", function()
+    local mysql = J.driver("mysql")
+    H.ok(#mysql.coords >= 2, "mysql-connector-j alone is not enough: " .. vim.inspect(mysql.coords))
+    H.ok(table.concat(mysql.coords, " "):match("protobuf"), "protobuf-java should be included")
+  end)
+
+  H.it("merges a user's own driver by key", function()
+    local saved = vim.g.kebab_jdbc_drivers
+    vim.g.kebab_jdbc_drivers = {
+      { key = "firebird", label = "Firebird", coords = { "org.firebirdsql.jdbc:jaybird" },
+        url = "jdbc:firebirdsql://{host}:{port}/{database}", default_port = 3050 },
+      { key = "postgresql", label = "Postgres (mine)" },
+    }
+    local keys = vim.tbl_map(function(d) return d.key end, J.drivers())
+    H.ok(vim.tbl_contains(keys, "firebird"), "a new driver should be added")
+    H.eq("Postgres (mine)", J.driver("postgresql").label, "an override should apply")
+    H.ok(#J.driver("postgresql").coords > 0, "and the rest of it should survive the merge")
+    vim.g.kebab_jdbc_drivers = saved
+    H.eq("PostgreSQL", J.driver("postgresql").label)
+  end)
+end)
+
+H.describe("reading a JDBC URL", function()
+  H.it("extracts the subprotocol", function()
+    H.eq("postgresql", J.subprotocol("jdbc:postgresql://host:5432/db"))
+    H.eq("sqlite", J.subprotocol("jdbc:sqlite:/tmp/a.db"))
+    H.eq("oracle", J.subprotocol("jdbc:oracle:thin:@host:1521/orcl"))
+  end)
+
+  H.it("rejects anything that is not a JDBC URL", function()
+    for _, bad in ipairs({ "sqlite:/tmp/a.db", "postgres://h/db", "", "jdbc:", "nonsense" }) do
+      H.eq(nil, J.subprotocol(bad), ("%q should not parse"):format(bad))
+    end
+    H.eq(nil, J.subprotocol(nil))
+  end)
+
+  H.it("finds the driver a URL needs", function()
+    H.eq("PostgreSQL", J.driver_for("jdbc:postgresql://h/db").label)
+    H.eq("SQLite", J.driver_for("jdbc:sqlite:/tmp/a.db").label)
+  end)
+
+  H.it("explains an unknown database, listing the ones it knows", function()
+    local d, err = J.driver_for("jdbc:cobol:whatever")
+    H.falsy(d)
+    H.matches("No driver registered", err)
+    H.matches("postgresql", err, "it should list what is available")
+  end)
+
+  H.it("explains a URL that is not JDBC at all", function()
+    local d, err = J.driver_for("postgres://h/db")
+    H.falsy(d)
+    H.matches("not a JDBC URL", err)
+  end)
+end)
+
+H.describe("building a JDBC URL", function()
+  H.it("fills in host, port and database", function()
+    H.eq("jdbc:postgresql://db.local:5432/shop",
+      J.build_url(J.driver("postgresql"), { host = "db.local", database = "shop" }))
+  end)
+
+  H.it("uses an explicit port over the default", function()
+    H.eq("jdbc:postgresql://db.local:6543/shop",
+      J.build_url(J.driver("postgresql"), { host = "db.local", port = 6543, database = "shop" }))
+  end)
+
+  H.it("defaults the host to localhost", function()
+    H.matches("//localhost:3306/", J.build_url(J.driver("mysql"), { database = "shop" }))
+  end)
+
+  H.it("expands a path for a file-backed database", function()
+    local url = J.build_url(J.driver("sqlite"), { file = "~/db/shop.sqlite" })
+    H.eq("jdbc:sqlite:" .. vim.fn.expand("~") .. "/db/shop.sqlite", url)
+  end)
+
+  H.it("builds a URL every driver's own parser accepts", function()
+    for _, d in ipairs(J.drivers()) do
+      local url = J.build_url(d, { host = "h", database = "db", file = "/tmp/x" })
+      H.eq(d.key, J.subprotocol(url), d.key .. " should build a URL it can read back")
+    end
+  end)
+end)
+
+H.describe("Maven coordinates and cache paths", function()
+  H.it("parses group:artifact and group:artifact:version", function()
+    local g, a, v = J.parse_coord("org.postgresql:postgresql")
+    H.eq({ "org.postgresql", "postgresql" }, { g, a })
+    H.eq(nil, v)
+    g, a, v = J.parse_coord("org.postgresql:postgresql:42.7.4")
+    H.eq({ "org.postgresql", "postgresql", "42.7.4" }, { g, a, v })
+  end)
+
+  H.it("rejects a malformed coordinate", function()
+    for _, bad in ipairs({ "", "onlyone", ":artifact", "group:" }) do
+      H.eq(nil, (J.parse_coord(bad)), ("%q should not parse"):format(bad))
+    end
+  end)
+
+  H.it("mirrors Maven's own layout, so the cache is recognisable", function()
+    H.matches("/jars/org/postgresql/postgresql/42%.7%.4/postgresql%-42%.7%.4%.jar$",
+      J.jar_path("org.postgresql", "postgresql", "42.7.4"))
+  end)
+
+  H.it("builds the right Maven Central URL", function()
+    H.eq("https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.47.1.0/sqlite-jdbc-3.47.1.0.jar",
+      J.maven_url("org.xerial", "sqlite-jdbc", "3.47.1.0"))
+  end)
+
+  H.it("keeps the cache out of the project", function()
+    local saved = vim.g.kebab_jdbc_dir
+    vim.g.kebab_jdbc_dir = nil
+    local dir = J.cache_dir()
+    vim.g.kebab_jdbc_dir = saved
+    H.matches(vim.pesc(vim.fn.stdpath("data")), dir, "driver jars must never land in a repository")
+  end)
+end)
+
+H.describe("the runner", function()
+  H.it("ships with the plugin", function()
+    local src = J.source()
+    H.ok(src, "java/KebabJdbc.java should be on the runtimepath")
+    H.ok(H.exists(src))
+    H.matches("public final class KebabJdbc", H.read(src))
+  end)
+
+  H.it("compiles, and caches the result", function()
+    if vim.fn.executable("javac") == 0 then
+      H.skip("javac is not on PATH")
+    end
+    local saved = vim.g.kebab_jdbc_dir
+    vim.g.kebab_jdbc_dir = H.tmpdir("jdbc-compile")
+    local out, err = J.compile()
+    H.ok(out, tostring(err))
+    H.ok(H.exists(out .. "/KebabJdbc.class"), "it should have produced a class file")
+    -- second call must not recompile
+    local before = vim.uv.fs_stat(out .. "/KebabJdbc.class").mtime.sec
+    local again = J.compile()
+    H.eq(out, again)
+    H.eq(before, vim.uv.fs_stat(out .. "/KebabJdbc.class").mtime.sec, "it should not recompile")
+    vim.g.kebab_jdbc_dir = saved
+  end)
+end)
+
+-- Everything below needs a JVM and, on a cold cache, the network. The cache
+-- directory is the real one on purpose: the 12MB driver is downloaded once and
+-- reused by later runs, which is also what a user experiences.
+H.describe("talking to a real database over JDBC", function()
+  local db, url
+
+  local function requires_jdbc()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+  end
+
+  ---A fixture database, built with the sqlite3 CLI but read over JDBC.
+  local function fixture()
+    if db then
+      return db, url
+    end
+    db = H.tmpdir("jdbc-db") .. "/shop.sqlite"
+    local sql = table.concat({
+      "CREATE TABLE customers (id INTEGER PRIMARY KEY, full_name TEXT, email TEXT);",
+      "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total_cents INTEGER);",
+      "INSERT INTO customers (full_name, email) VALUES ('Ada Lovelace','ada@example.com');",
+      "INSERT INTO customers (full_name, email) VALUES ('Alan Turing','alan@example.com');",
+      "INSERT INTO orders (customer_id, total_cents) VALUES (1, 4999);",
+    }, "\n")
+    local res = vim.system({ "sqlite3", db }, { stdin = sql, text = true }):wait(30000)
+    H.eq(0, res.code, "fixture creation failed: " .. tostring(res.stderr))
+    url = "jdbc:sqlite:" .. db
+    return db, url
+  end
+
+  H.it("downloads the driver and assembles a classpath", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local cp, err = J.ensure(u)
+    H.ok(cp, tostring(err))
+    H.matches("sqlite%-jdbc.*%.jar", cp, "the driver jar should be on the classpath")
+    H.matches("classes", cp, "and so should the compiled runner")
+  end)
+
+  H.it("reports the driver as installed once it is", function()
+    requires_jdbc()
+    local _, u = fixture()
+    H.ok(J.ensure(u), "precondition: the driver installs")
+    H.eq(true, J.installed(J.driver("sqlite")),
+      "after a successful install the driver must report as installed")
+  end)
+
+  H.it("connects", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "ping")
+    H.ok(lines, tostring(err))
+    H.matches("SQLite", lines[1], "ping should name the database product")
+  end)
+
+  H.it("lists tables through DatabaseMetaData", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "tables")
+    H.ok(lines, tostring(err))
+    H.ok(vim.tbl_contains(lines, "customers"))
+    H.ok(vim.tbl_contains(lines, "orders"))
+  end)
+
+  H.it("lists a table's columns with their types", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "columns", { args = { "customers" } })
+    H.ok(lines, tostring(err))
+    H.eq(3, #lines, vim.inspect(lines))
+    H.matches("^id\tINTEGER", lines[1])
+    H.matches("^full_name\tTEXT", lines[2])
+  end)
+
+  H.it("dumps the whole schema in one round trip, for completion", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "schema")
+    H.ok(lines, tostring(err))
+    H.eq(6, #lines, "3 customers columns + 3 orders columns: " .. vim.inspect(lines))
+    H.matches("^customers\tid\tINTEGER", lines[1])
+  end)
+
+  H.it("runs a query and prints an aligned table", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "query", { stdin = "select full_name, email from customers order by id" })
+    H.ok(lines, tostring(err))
+    local text = table.concat(lines, "\n")
+    H.matches("full_name", text)
+    H.matches("Ada Lovelace", text)
+    H.matches("Alan Turing", text)
+    H.matches("%(2 rows%)", text, "it should say how many rows came back")
+    H.matches("|", text, "and align the columns")
+  end)
+
+  H.it("runs a join", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "query",
+      { stdin = "select c.full_name, o.total_cents from customers c join orders o on o.customer_id = c.id" })
+    H.ok(lines, tostring(err))
+    H.matches("4999", table.concat(lines, "\n"))
+  end)
+
+  H.it("reports an update count rather than an empty grid", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "query", { stdin = "update customers set email = email where id = 1" })
+    H.ok(lines, tostring(err))
+    H.matches("1 row affected", table.concat(lines, "\n"))
+  end)
+
+  H.it("passes a SQL error back instead of failing silently", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "query", { stdin = "select * from no_such_table" })
+    H.falsy(lines)
+    H.matches("no such table", err)
+  end)
+
+  H.it("explains a missing driver rather than saying 'no suitable driver'", function()
+    requires_jdbc()
+    -- A URL whose driver is not registered never reaches the JVM.
+    local lines, err = J.run("jdbc:cobol:x", "ping")
+    H.falsy(lines)
+    H.matches("No driver registered", err)
+  end)
+
+  H.it("leaves no warm process behind for the next spec", function()
+    J.shutdown_all()
+    H.eq(0, J.daemon_count())
+  end)
+end)
+
+-- The warm process. Measured on this machine: a one-shot query costs ~180ms,
+-- almost all of it one-time per-process driver initialisation, while the same
+-- query on a process that is already up costs ~0.2ms. These tests check both
+-- that it is faster and -- more importantly -- that it is still correct.
+H.describe("the warm JDBC process", function()
+  local url
+
+  local function requires_jdbc()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+  end
+
+  local function fixture()
+    if url then
+      return url
+    end
+    local db = H.tmpdir("warm-db") .. "/w.sqlite"
+    local res = vim.system({ "sqlite3", db }, {
+      stdin = "create table t(id integer primary key, a text);"
+        .. "insert into t(a) values('x'),('y');",
+      text = true,
+    }):wait(30000)
+    H.eq(0, res.code)
+    url = "jdbc:sqlite:" .. db
+    return url
+  end
+
+  local function with_daemon(fn)
+    local saved = vim.g.kebab_jdbc_daemon
+    vim.g.kebab_jdbc_daemon = true
+    local ok, err = pcall(fn)
+    J.shutdown_all()
+    vim.g.kebab_jdbc_daemon = saved
+    if not ok then error(err, 0) end
+  end
+
+  H.it("is on by default, and can be turned off", function()
+    local saved = vim.g.kebab_jdbc_daemon
+    vim.g.kebab_jdbc_daemon = nil
+    H.eq(true, J.daemon_enabled())
+    vim.g.kebab_jdbc_daemon = false
+    H.eq(false, J.daemon_enabled())
+    vim.g.kebab_jdbc_daemon = saved
+  end)
+
+  H.it("starts one process per connection and reuses it", function()
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      -- Earlier tests in this file run through J.run too, so the starting
+      -- state has to be established rather than assumed.
+      J.shutdown_all()
+      H.eq(0, J.daemon_count())
+      H.ok(J.run(u, "tables"), "first call should work")
+      H.eq(1, J.daemon_count(), "it should have started a process")
+      H.ok(J.run(u, "tables"))
+      H.ok(J.run(u, "tables"))
+      H.eq(1, J.daemon_count(), "and reused it rather than starting more")
+    end)
+  end)
+
+  H.it("gives the same answers as a one-shot run", function()
+    -- The whole point: a faster path that returns something different would be
+    -- worse than the slow one.
+    requires_jdbc()
+    local u = fixture()
+    local saved = vim.g.kebab_jdbc_daemon
+
+    vim.g.kebab_jdbc_daemon = false
+    local cold_tables = J.run(u, "tables")
+    local cold_cols = J.run(u, "columns", { args = { "t" } })
+    local cold_schema = J.run(u, "schema")
+    local cold_query = J.run(u, "query", { stdin = "select * from t order by id" })
+
+    vim.g.kebab_jdbc_daemon = true
+    local warm_tables = J.run(u, "tables")
+    local warm_cols = J.run(u, "columns", { args = { "t" } })
+    local warm_schema = J.run(u, "schema")
+    local warm_query = J.run(u, "query", { stdin = "select * from t order by id" })
+    J.shutdown_all()
+    vim.g.kebab_jdbc_daemon = saved
+
+    H.eq(cold_tables, warm_tables, "tables should match")
+    H.eq(cold_cols, warm_cols, "columns should match")
+    H.eq(cold_schema, warm_schema, "schema should match")
+    H.eq(cold_query, warm_query, "query output should match")
+  end)
+
+  H.it("is dramatically faster once up", function()
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      J.run(u, "query", { stdin = "select 1" }) -- pay the start-up
+
+      local t0 = vim.uv.hrtime()
+      for _ = 1, 10 do
+        H.ok(J.run(u, "query", { stdin = "select * from t" }))
+      end
+      local mean = (vim.uv.hrtime() - t0) / 1e6 / 10
+      -- A one-shot run is ~180ms here. Asserting a generous 40ms keeps this
+      -- from being a flaky benchmark while still failing loudly if the warm
+      -- path silently stops being used.
+      H.ok(mean < 40, ("expected a warm query well under 40ms, got %.1fms"):format(mean))
+    end)
+  end)
+
+  H.it("handles SQL containing newlines and sentinel-looking lines", function()
+    -- Why the protocol is length-prefixed rather than sentinel-delimited.
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      local lines, err = J.run(u, "query", {
+        stdin = "select *\nfrom t\n-- OK\t0\n-- --KEBAB-END--\norder by id",
+      })
+      H.ok(lines, tostring(err))
+      H.matches("%(2 rows%)", table.concat(lines, "\n"))
+    end)
+  end)
+
+  H.it("passes a SQL error back and stays usable", function()
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      local bad, err = J.run(u, "query", { stdin = "select * from nope" })
+      H.falsy(bad)
+      H.matches("no such table", err)
+      -- the process must survive a bad query
+      H.eq(1, J.daemon_count(), "a SQL error should not kill the process")
+      H.ok(J.run(u, "tables"), "and it should still answer")
+    end)
+  end)
+
+  H.it("answers many requests in order", function()
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      for i = 1, 15 do
+        local lines, err = J.run(u, "query", { stdin = ("select %d as n"):format(i) })
+        H.ok(lines, tostring(err))
+        H.matches(tostring(i), table.concat(lines, "\n"), "response " .. i .. " should match its request")
+      end
+    end)
+  end)
+
+  H.it("shuts down cleanly, and again is a no-op", function()
+    requires_jdbc()
+    local u = fixture()
+    vim.g.kebab_jdbc_daemon = true
+    J.run(u, "tables")
+    H.eq(1, J.daemon_count())
+    H.eq(true, J.shutdown(u))
+    H.eq(0, J.daemon_count())
+    H.eq(false, J.shutdown(u), "shutting down twice should be harmless")
+    J.shutdown_all()
+  end)
+
+  H.it("restarts after a shutdown", function()
+    requires_jdbc()
+    with_daemon(function()
+      local u = fixture()
+      J.run(u, "tables")
+      J.shutdown(u)
+      H.ok(J.run(u, "tables"), "it should start a fresh process")
+      H.eq(1, J.daemon_count())
+    end)
+  end)
+
+  H.it("falls back to a one-shot run when the process cannot start", function()
+    -- A URL with no registered driver never gets a process; the caller should
+    -- still get the real error rather than a hang.
+    local lines, err = J.run("jdbc:cobol:x", "ping")
+    H.falsy(lines)
+    H.matches("No driver registered", err)
+  end)
+end)

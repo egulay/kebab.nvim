@@ -1,0 +1,647 @@
+-- The SQL IDE: saved connections, table browsing, query buffers.
+--
+-- kebab.jdbc does the talking; this is the part a person uses. The shape is
+-- a dedicated database IDE's: add a data source once, pick it for a console,
+-- browse tables,
+-- open one to see its rows.
+--
+-- Connections live in stdpath("data"), never in the project, and a password is
+-- never stored -- a connection names an *environment variable* to read it from
+-- instead. Committing a password by accident is a bigger problem than typing
+-- `export` once.
+local M = {}
+
+local jdbc = require("kebab.jdbc")
+
+function M.store_path()
+  return (vim.g.kebab_db_store and vim.fn.expand(vim.g.kebab_db_store))
+    or (vim.fn.stdpath("data") .. "/kebab/connections.json")
+end
+
+-- ------------------------------------------------------------------- store
+
+---@class kebab.DbConnection
+---@field name string
+---@field url string          a JDBC URL
+---@field user? string
+---@field password_env? string name of an environment variable holding the password
+
+---Saved connections.
+---@return kebab.DbConnection[] connections, string|nil err
+function M.connections()
+  local path = M.store_path()
+  if not vim.uv.fs_stat(path) then
+    return {}, nil
+  end
+  local ok, text = pcall(function()
+    return table.concat(vim.fn.readfile(path), "\n")
+  end)
+  if not ok then
+    return {}, "Could not read " .. path
+  end
+  if vim.trim(text) == "" then
+    return {}, nil
+  end
+  local decoded
+  ok, decoded = pcall(vim.json.decode, text)
+  if not ok then
+    return {}, ("%s is not valid JSON: %s"):format(path, tostring(decoded))
+  end
+  local list = type(decoded) == "table" and (decoded.connections or (vim.islist(decoded) and decoded)) or nil
+  -- An object keyed by name is the obvious thing to try when hand-editing,
+  -- and it is a table -- so it has to be rejected by shape, not by type, or
+  -- every saved connection silently reads back as zero.
+  if type(list) ~= "table" or not vim.islist(list) then
+    return {}, path .. ' should have a "connections" list'
+  end
+  local out = {}
+  for i, c in ipairs(list) do
+    local valid, err = M.validate(c, i)
+    if not valid then
+      return {}, err
+    end
+    out[#out + 1] = c
+  end
+  return out, nil
+end
+
+---@param c any
+---@param index? number
+function M.validate(c, index)
+  local where = index and ("connection %d"):format(index) or "connection"
+  if type(c) ~= "table" then
+    return false, where .. " is not an object"
+  end
+  if type(c.name) ~= "string" or c.name == "" then
+    return false, where .. " needs a name"
+  end
+  where = ("connection %q"):format(c.name)
+  if type(c.url) ~= "string" or c.url == "" then
+    return false, where .. " needs a url"
+  end
+  if not jdbc.subprotocol(c.url) then
+    return false, ("%s has a url that is not JDBC: %s"):format(where, c.url)
+  end
+  local _, derr = jdbc.driver_for(c.url)
+  if derr then
+    return false, ("%s: %s"):format(where, derr)
+  end
+  for _, field in ipairs({ "user", "password_env" }) do
+    if c[field] ~= nil and type(c[field]) ~= "string" then
+      return false, ("%s %s should be a string"):format(where, field)
+    end
+  end
+  return true
+end
+
+---Write connections back, pretty-printed so the file stays hand-editable.
+function M.save(connections)
+  for i, c in ipairs(connections) do
+    local ok, err = M.validate(c, i)
+    if not ok then
+      return false, err
+    end
+  end
+  local path = M.store_path()
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  local encoded = vim.json.encode({ connections = connections })
+  local pretty = { encoded }
+  -- jq only pretty-prints; it is not required. vim.fn.system raises E475 for a
+  -- missing executable rather than setting v:shell_error, so check first.
+  if vim.fn.executable("jq") == 1 then
+    local ran, out = pcall(vim.fn.system, { "jq", "." }, encoded)
+    if ran and vim.v.shell_error == 0 and vim.trim(out) ~= "" then
+      pretty = vim.split(out, "\n")
+    end
+  end
+  while #pretty > 0 and pretty[#pretty] == "" do
+    table.remove(pretty)
+  end
+  vim.fn.writefile(pretty, path)
+  -- a connections file may hold a username; keep it to the owner
+  pcall(vim.uv.fs_chmod, path, 384) -- 0600
+  return true
+end
+
+---@param name string
+function M.connection(name)
+  local list, err = M.connections()
+  if err then
+    return nil, err
+  end
+  for _, c in ipairs(list) do
+    if c.name == name then
+      return c, nil
+    end
+  end
+  return nil, nil
+end
+
+---Add a connection, replacing one of the same name.
+function M.add(connection)
+  local ok, err = M.validate(connection)
+  if not ok then
+    return false, err
+  end
+  -- Refusing here is the whole point: M.save rewrites the file wholesale, so
+  -- adding to a store that failed to load would replace every saved
+  -- connection with just this one.
+  local list, lerr = M.connections()
+  if lerr then
+    return false, ("%s (fix it, or :IdeDbEdit, before adding a connection)"):format(lerr)
+  end
+  for i, c in ipairs(list) do
+    if c.name == connection.name then
+      local old_url = c.url
+      list[i] = connection
+      local saved, serr = M.save(list)
+      if saved and old_url and old_url ~= connection.url then
+        -- The warm process for the old URL still holds a connection to a
+        -- database this name no longer refers to; M.remove could not reclaim
+        -- it afterwards, because it only knows the current URL.
+        pcall(function()
+          require("kebab.jdbc").shutdown(old_url)
+        end)
+      end
+      return saved, serr
+    end
+  end
+  list[#list + 1] = connection
+  return M.save(list)
+end
+
+function M.remove(name)
+  local list, lerr = M.connections()
+  if lerr then
+    return false, lerr
+  end
+  for i, c in ipairs(list) do
+    if c.name == name then
+      table.remove(list, i)
+      -- Its warm process is holding a connection to a database we are
+      -- forgetting about.
+      pcall(function()
+        require("kebab.jdbc").shutdown(c.url)
+      end)
+      local ok, err = M.save(list)
+      return ok, err
+    end
+  end
+  return false, ("No connection named %q"):format(tostring(name))
+end
+
+-- ------------------------------------------------------------- credentials
+
+---Credentials for a connection, read from the environment at use time so no
+---password is ever written to disk by this layer.
+---@param c kebab.DbConnection
+function M.credentials(c)
+  local creds = {}
+  if c.user and c.user ~= "" then
+    creds.user = c.user
+  end
+  if c.password_env and c.password_env ~= "" then
+    local value = vim.env[c.password_env]
+    if value == nil or value == "" then
+      return creds, ("%s is not set, so %q has no password"):format(c.password_env, c.name)
+    end
+    creds.password = value
+  end
+  return creds, nil
+end
+
+---Publish credentials where kebab.jdbc can find them for this URL.
+local function publish_credentials(c)
+  local creds, warn = M.credentials(c)
+  local all = vim.g.kebab_db_credentials
+  all = type(all) == "table" and all or {}
+  all[c.url] = creds
+  vim.g.kebab_db_credentials = all
+  return warn
+end
+
+-- ------------------------------------------------------------------ dadbod
+
+---Expose saved connections to vim-dadbod-ui, which reads vim.g.dbs.
+function M.publish()
+  local list, lerr = M.connections()
+  if lerr then
+    vim.notify(lerr, vim.log.levels.ERROR)
+    return nil, lerr
+  end
+  local dbs = {}
+  for _, c in ipairs(list) do
+    publish_credentials(c)
+    dbs[#dbs + 1] = { name = c.name, url = c.url }
+  end
+  vim.g.dbs = dbs
+  return dbs, nil
+end
+
+---Attach a connection to a buffer, so :DB and completion use it.
+---
+---The re-fetch matters: vim-dadbod-completion populates its cache from a
+---`FileType sql` autocmd, which fires *before* b:db exists. Without this,
+---completion in a standalone .sql file stays empty for the whole session --
+---which is exactly what a scratch file is.
+---@param c kebab.DbConnection
+---@param bufnr? number
+function M.attach(c, bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local warn = publish_credentials(c)
+  vim.b[bufnr].db = c.url
+  vim.b[bufnr].kebab_db_name = c.name
+  pcall(vim.fn["vim_dadbod_completion#fetch"], bufnr)
+  -- Load the schema now so the first completion is instant rather than paying
+  -- for a JDBC round trip on a keystroke.
+  pcall(function()
+    require("kebab.dbcomplete").warm(c.url)
+  end)
+  if warn then
+    vim.notify(warn, vim.log.levels.WARN)
+  end
+  return true
+end
+
+---The connection attached to a buffer, if any.
+function M.attached(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local url = vim.b[bufnr].db
+  if url == nil or url == "" then
+    return nil
+  end
+  return { name = vim.b[bufnr].kebab_db_name or url, url = url }
+end
+
+-- -------------------------------------------------------------- operations
+
+---Test a connection. Returns the server banner, or nil plus the reason.
+function M.ping(c)
+  publish_credentials(c)
+  local lines, err = jdbc.run(c.url, "ping", { timeout = 60000 })
+  if not lines then
+    return nil, err
+  end
+  return lines[1]
+end
+
+---Tables for a connection.
+function M.tables(c)
+  publish_credentials(c)
+  return jdbc.run(c.url, "tables", { timeout = 90000 })
+end
+
+---Columns of a table, as { name, type, nullable }.
+function M.columns(c, table_name)
+  publish_credentials(c)
+  local lines, err = jdbc.run(c.url, "columns", { args = { table_name }, timeout = 90000 })
+  if not lines then
+    return nil, err
+  end
+  local out = {}
+  for _, line in ipairs(lines) do
+    local name, typ, nullable = line:match("^([^\t]*)\t([^\t]*)\t(.*)$")
+    if name then
+      out[#out + 1] = { name = name, type = typ, nullable = nullable }
+    end
+  end
+  return out
+end
+
+---Run SQL and return the output lines.
+function M.query(c, sql)
+  publish_credentials(c)
+  return jdbc.run(c.url, "query", { stdin = sql, timeout = 300000 })
+end
+
+---How many rows a table preview shows. A database IDE pages; this just caps.
+function M.preview_limit()
+  return tonumber(vim.g.kebab_db_preview_limit) or 200
+end
+
+-- How each dialect spells "the first N rows", and what it quotes identifiers
+-- with. The names come straight from the driver's catalog, so they are in the
+-- server's own case and may be reserved words -- quoting them is not optional.
+local DIALECTS = {
+  oracle = { quote = '"', tail = "fetch first %d rows only" },
+  sqlserver = { quote = "[", head = "top (%d) " },
+  mysql = { quote = "`" },
+  mariadb = { quote = "`" },
+}
+
+---Quote one dotted catalog identifier for a dialect: schema.name -> "schema"."name".
+---@param name string
+---@param quote string
+local function quote_identifier(name, quote)
+  local open, close = quote, quote
+  if quote == "[" then
+    open, close = "[", "]"
+  end
+  local parts = {}
+  for part in tostring(name):gmatch("[^.]+") do
+    -- doubling the closing quote is how every one of these dialects escapes it
+    parts[#parts + 1] = open .. part:gsub(vim.pesc(close), close .. close) .. close
+  end
+  if #parts == 0 then
+    return open .. close
+  end
+  return table.concat(parts, ".")
+end
+
+---The SQL a table preview runs. Dialect-aware: `limit` is not universal --
+---Oracle and SQL Server both reject it, and they are both registered drivers.
+---@param url string a JDBC URL
+---@param table_name string
+---@param limit number
+function M.preview_sql(url, table_name, limit)
+  local d = DIALECTS[jdbc.subprotocol(url) or ""] or {}
+  local head = d.head and d.head:format(limit) or ""
+  -- a dialect caps rows either in the select list or in a trailing clause,
+  -- never both: `top (n) ... limit n` is a syntax error on SQL Server
+  local tail = ""
+  if d.tail then
+    tail = " " .. d.tail:format(limit)
+  elseif not d.head then
+    tail = (" limit %d"):format(limit)
+  end
+  return ("select %s* from %s%s"):format(head, quote_identifier(table_name, d.quote or '"'), tail)
+end
+
+---Open a table's rows in a scratch buffer, the way double-clicking a table in
+---a database IDE does.
+---@param c kebab.DbConnection
+---@param table_name string
+function M.open_table(c, table_name)
+  local sql = M.preview_sql(c.url, table_name, M.preview_limit())
+  local lines, err = M.query(c, sql)
+  if not lines then
+    vim.notify(err, vim.log.levels.ERROR)
+    return false
+  end
+  vim.cmd("new")
+  local buf = vim.api.nvim_get_current_buf()
+  -- Make it a scratch buffer *before* naming it. Naming can fail (E95 when a
+  -- previous preview of the same table is still open), and if it throws first
+  -- the user is left in an ordinary modifiable buffer with swap enabled where
+  -- a read-only grid was expected.
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  local base = ("kebab-db://%s/%s"):format(c.name, table_name)
+  local name, n = base, 1
+  while vim.fn.bufexists(name) == 1 do
+    n = n + 1
+    name = ("%s#%d"):format(base, n)
+  end
+  pcall(vim.api.nvim_buf_set_name, buf, name)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.list_extend({ "-- " .. sql, "" }, lines))
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "dbout"
+  return true
+end
+
+-- -------------------------------------------------------------- interactive
+
+---Pick a connection, then do something with it.
+---@param prompt string
+---@param cb fun(c: kebab.DbConnection)
+function M.pick(prompt, cb)
+  local list, err = M.connections()
+  if err then
+    return vim.notify(err, vim.log.levels.ERROR)
+  end
+  if #list == 0 then
+    return vim.notify("No database connections yet (:IdeDbAdd creates one)", vim.log.levels.WARN)
+  end
+  if #list == 1 then
+    return cb(list[1])
+  end
+  vim.ui.select(list, {
+    prompt = prompt,
+    format_item = function(c)
+      local driver = jdbc.driver_for(c.url)
+      return ("%-22s %-12s %s"):format(c.name, driver and driver.label or "?", c.url)
+    end,
+  }, function(choice)
+    if choice then
+      cb(choice)
+    end
+  end)
+end
+
+---The connection to act on: the one attached to this buffer, else ask.
+function M.current(cb)
+  local attached = M.attached()
+  if attached then
+    -- a buffer's own connection carries no stored user/password_env, so prefer
+    -- the saved entry with the same url when there is one
+    for _, c in ipairs((M.connections())) do
+      if c.url == attached.url then
+        return cb(c)
+      end
+    end
+    return cb(attached)
+  end
+  M.pick("Database", cb)
+end
+
+---Add a connection by answering a few questions.
+function M.add_interactive()
+  local drivers = jdbc.drivers()
+  vim.ui.select(drivers, {
+    prompt = "Database",
+    format_item = function(d)
+      return ("%-12s %s"):format(d.key, d.label)
+    end,
+  }, function(driver)
+    if not driver then
+      return
+    end
+    vim.ui.input({ prompt = "Connection name: " }, function(name)
+      if not name or vim.trim(name) == "" then
+        return
+      end
+      local function finish(parts)
+        local connection = {
+          name = vim.trim(name),
+          url = jdbc.build_url(driver, parts),
+          user = parts.user ~= "" and parts.user or nil,
+          password_env = parts.password_env ~= "" and parts.password_env or nil,
+        }
+        local ok, err = M.add(connection)
+        if not ok then
+          return vim.notify(err, vim.log.levels.ERROR)
+        end
+        M.publish()
+        vim.notify(("Added %q — testing the connection…"):format(connection.name))
+        vim.schedule(function()
+          local banner, perr = M.ping(connection)
+          if banner then
+            vim.notify(("%s: connected to %s"):format(connection.name, banner))
+          else
+            vim.notify(("%s saved, but connecting failed:\n%s"):format(connection.name, tostring(perr)),
+              vim.log.levels.WARN)
+          end
+        end)
+      end
+
+      if driver.file then
+        vim.ui.input({ prompt = "Database file: ", completion = "file" }, function(file)
+          if not file or vim.trim(file) == "" then
+            return
+          end
+          finish({ file = vim.trim(file), user = "", password_env = "" })
+        end)
+        return
+      end
+
+      vim.ui.input({ prompt = "Host: ", default = "localhost" }, function(host)
+        if host == nil then return end
+        vim.ui.input({ prompt = "Port: ", default = tostring(driver.default_port or "") }, function(port)
+          if port == nil then return end
+          vim.ui.input({ prompt = "Database: " }, function(database)
+            if database == nil then return end
+            vim.ui.input({ prompt = "User: " }, function(user)
+              if user == nil then return end
+              vim.ui.input({
+                prompt = "Env var holding the password (blank for none): ",
+              }, function(password_env)
+                if password_env == nil then return end
+                finish({
+                  host = vim.trim(host) ~= "" and vim.trim(host) or "localhost",
+                  port = tonumber(port) or driver.default_port,
+                  database = vim.trim(database),
+                  user = vim.trim(user),
+                  password_env = vim.trim(password_env),
+                })
+              end)
+            end)
+          end)
+        end)
+      end)
+    end)
+  end)
+end
+
+---Browse the tables of a connection and open one.
+function M.browse()
+  M.current(function(c)
+    local tables, err = M.tables(c)
+    if not tables then
+      return vim.notify(err, vim.log.levels.ERROR)
+    end
+    if #tables == 0 then
+      return vim.notify(("%s has no tables"):format(c.name), vim.log.levels.INFO)
+    end
+    vim.ui.select(tables, { prompt = ("Tables in %s"):format(c.name) }, function(choice)
+      if choice then
+        M.open_table(c, choice)
+      end
+    end)
+  end)
+end
+
+---A new SQL buffer bound to a connection, the way a database IDE opens a console.
+function M.console()
+  M.current(function(c)
+    local dir = vim.fn.stdpath("data") .. "/kebab/sql"
+    vim.fn.mkdir(dir, "p")
+    local path
+    for i = 1, 1000 do
+      path = ("%s/%s-%d.sql"):format(dir, c.name:gsub("[^%w%-_]", "_"), i)
+      if not vim.uv.fs_stat(path) then
+        break
+      end
+    end
+    vim.fn.writefile({ ("-- %s"):format(c.name), "", "" }, path)
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.bo.filetype = "sql"
+    M.attach(c)
+    vim.notify(("SQL console on %s — <leader>S runs the statement under the cursor"):format(c.name))
+  end)
+end
+
+function M.setup()
+  -- Make saved connections visible to vim-dadbod-ui without waiting for a
+  -- command to be run.
+  pcall(M.publish)
+
+  -- A warm JDBC process per connection is what makes queries cost 0.2ms
+  -- instead of 180ms, but it is a child process holding an open database
+  -- connection -- so it has to be closed on the way out.
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = vim.api.nvim_create_augroup("kebab_db", { clear = true }),
+    callback = function()
+      pcall(function()
+        require("kebab.jdbc").shutdown_all()
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_user_command("IdeDbStatus", function()
+    local jdbc = require("kebab.jdbc")
+    local list = M.connections()
+    vim.notify(("Connections: %d\nWarm JDBC processes: %d")
+      :format(#list, jdbc.daemon_count()))
+  end, { desc = "Report database connections and warm processes" })
+
+  vim.api.nvim_create_user_command("IdeDbDisconnect", function()
+    local jdbc = require("kebab.jdbc")
+    local n = jdbc.daemon_count()
+    jdbc.shutdown_all()
+    vim.notify(("Closed %d warm JDBC process%s"):format(n, n == 1 and "" or "es"))
+  end, { desc = "Close the warm JDBC processes" })
+
+  vim.api.nvim_create_user_command("IdeDbAdd", function()
+    M.add_interactive()
+  end, { desc = "Add a database connection" })
+
+  vim.api.nvim_create_user_command("IdeDbConnect", function()
+    M.pick("Attach to this buffer", function(c)
+      M.attach(c)
+      vim.notify(("%s attached to this buffer"):format(c.name))
+    end)
+  end, { desc = "Attach a database connection to this buffer" })
+
+  vim.api.nvim_create_user_command("IdeDbTables", function()
+    M.browse()
+  end, { desc = "Browse tables and open one" })
+
+  vim.api.nvim_create_user_command("IdeDbConsole", function()
+    M.console()
+  end, { desc = "New SQL console bound to a connection" })
+
+  vim.api.nvim_create_user_command("IdeDbPing", function()
+    M.current(function(c)
+      local banner, err = M.ping(c)
+      vim.notify(banner and (c.name .. ": " .. banner) or (c.name .. ": " .. tostring(err)),
+        banner and vim.log.levels.INFO or vim.log.levels.ERROR)
+    end)
+  end, { desc = "Test a database connection" })
+
+  vim.api.nvim_create_user_command("IdeDbRemove", function()
+    M.pick("Remove which connection", function(c)
+      vim.ui.select({ "No", "Yes" }, { prompt = ("Remove %q?"):format(c.name) }, function(answer)
+        if answer ~= "Yes" then
+          return
+        end
+        local ok, err = M.remove(c.name)
+        vim.notify(ok and ("Removed " .. c.name) or tostring(err),
+          ok and vim.log.levels.INFO or vim.log.levels.ERROR)
+        if ok then
+          M.publish()
+        end
+      end)
+    end)
+  end, { desc = "Remove a database connection" })
+
+  vim.api.nvim_create_user_command("IdeDbEdit", function()
+    local path = M.store_path()
+    if not vim.uv.fs_stat(path) then
+      M.save({})
+    end
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+  end, { desc = "Edit the database connections file" })
+end
+
+return M

@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+#
+# kebab -- open and create projects in the kebab.nvim IDE layer.
+#
+# Deliberately thin: it turns arguments into one call into lua/kebab/cli.lua, so
+# the behaviour lives in Lua that the test suite exercises directly.
+#
+#   kebab                      open the IDE in the current directory
+#   kebab <path>               open that directory (or that file's project)
+#   kebab open                 pick a project from the known roots
+#   kebab open <name>          open the project called <name>
+#   kebab new                  create a project, asking as it goes
+#   kebab new <name>           same, with the name filled in
+#   kebab new <name> --type <t> [--dir <d>] [--<answer> <value>]...
+#                              create without being asked anything; any prompt
+#                              the type declares is settable as --name value,
+#                              e.g. --group com.foo --deps web,data-jpa
+#                                   --module github.com/you/thing
+#                                   --language javascript  --kind lib
+#   kebab new <name> --type <t> --no-open
+#                              create it and stop, without opening the editor
+#   kebab types [--prompts]    list the project types, and what each one asks
+#   Semantic queries, for a caller that is not a person (an AI agent, a script).
+#   Read-only: none of these write to the working tree. Add --json for a
+#   machine-readable answer, and --exit-code to make `diagnostics` fail when it
+#   finds an error.
+#
+#   kebab diagnostics <file>            errors and warnings, from the language server
+#   kebab definition <file>:<line>:<col>    where that symbol is defined
+#   kebab references <file>:<line>:<col>    everywhere it is used
+#   kebab symbols <file>                the outline of a file
+#   kebab hover <file>:<line>:<col>     its type and documentation
+#
+#   kebab serve [--socket <path>]       a warm instance, so the language server
+#                                       stays attached (~4ms a query instead of
+#                                       ~200ms, and jdtls indexes only once)
+#   kebab --server <path> <query>...    ask that instance
+#
+#   kebab list                 list the projects found under the known roots
+#   kebab types                list the project types that can be created
+#   kebab doctor               check the environment
+#   kebab help | version
+#
+# Set KEBAB_DRY_RUN=1 to print the Lua a command would run instead of running it.
+#
+# Project roots default to ~/Projects, ~/src, ~/code and
+# ~/dev; override with KEBAB_PROJECT_ROOTS as a colon-separated
+# list. Set KEBAB_NVIM to use a particular Neovim binary.
+set -euo pipefail
+
+VERSION="0.1.0"
+NVIM="${KEBAB_NVIM:-nvim}"
+
+die() { printf 'kebab: %s\n' "$1" >&2; exit 1; }
+
+command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH"
+
+# Print the comment block at the top of this file as the help text, so the
+# usage and the documentation cannot drift apart.
+usage() { sed -n '3,${/^#/!q; s/^# \{0,1\}//p;}' "$0"; }
+
+# Quote a string as a Lua literal. Project names and paths reach Lua through
+# this, so a quote or a backslash in a directory name cannot end the string and
+# run as code.
+lua_str() {
+  local s=${1-}
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+
+# An interactive editor session: Neovim owns the terminal.
+#
+# With KEBAB_DRY_RUN set, print the Lua that would have run instead. The test
+# suite uses this to check argument quoting, which is otherwise unobservable:
+# an interactive editor cannot be inspected from a headless test.
+run_editor() {
+  if [ -n "${KEBAB_DRY_RUN:-}" ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  exec "$NVIM" -c "$1"
+}
+
+# A report: headless, stdout only, exit code meaningful. Honours KEBAB_DRY_RUN
+# for the same reason run_editor does -- so every path can be inspected without
+# being executed, including `new --no-open`, which really does create files.
+run_headless() {
+  if [ -n "${KEBAB_DRY_RUN:-}" ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  "$NVIM" --headless -n -c "$1" 2>&1
+}
+
+# Quote a string as a JSON string literal. Paths and positions only, so the
+# control characters JSON also requires escaping cannot occur here.
+json_str() {
+  local s=${1-}
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+
+# Quote a string as a VimScript double-quoted literal, for the --server path.
+# A query has to survive shell -> VimScript -> Lua, and the arguments are passed
+# as JSON because that is the only encoding all three agree on.
+vim_str() {
+  local s=${1-}
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+
+# A unix socket path is limited to about 108 bytes, so the default is kept short
+# deliberately -- a path under a long scratch directory silently fails to bind.
+default_socket() {
+  printf '%s/kebab.sock' "${XDG_RUNTIME_DIR:-/tmp}"
+}
+
+# Collect the semantic-query flags, leaving positional arguments in QUERY_ARGS.
+parse_query_flags() {
+  QUERY_JSON=false
+  QUERY_EXIT_CODE=false
+  QUERY_TIMEOUT=""
+  QUERY_ARGS=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) QUERY_JSON=true; shift ;;
+      --exit-code) QUERY_EXIT_CODE=true; shift ;;
+      --timeout) [ $# -ge 2 ] || die "--timeout needs a value"; QUERY_TIMEOUT=$2; shift 2 ;;
+      --) shift; while [ $# -gt 0 ]; do QUERY_ARGS+=("$1"); shift; done ;;
+      -*) die "unknown option: $1" ;;
+      *) QUERY_ARGS+=("$1"); shift ;;
+    esac
+  done
+}
+
+# The opts table the Lua side expects.
+query_opts_lua() {
+  local parts="json = $QUERY_JSON, exit_code = $QUERY_EXIT_CODE"
+  [ -n "$QUERY_TIMEOUT" ] && parts="$parts, attach_timeout = $QUERY_TIMEOUT"
+  printf '{ %s }' "$parts"
+}
+
+# Run a query against a warm instance over Neovim's own RPC.
+run_remote() {
+  local socket=$1 command=$2
+  shift 2
+  command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH"
+  [ -S "$socket" ] || die "no instance listening at $socket (start one with: kebab serve)"
+
+  # Arguments as JSON, so nothing has to be escaped three times over.
+  local args_json="[" first=1
+  for a in "$@"; do
+    [ $first -eq 1 ] || args_json="$args_json,"
+    first=0
+    args_json="$args_json$(json_str "$a")"
+  done
+  args_json="$args_json]"
+
+  local request
+  request=$(printf '{"command":"%s","args":%s,"opts":{"json":%s,"exit_code":%s}}' \
+    "$command" "$args_json" "$QUERY_JSON" "$QUERY_EXIT_CODE")
+  # One round trip. The reply is the exit code on the first line, then the
+  # output -- three calls to read back a number and a string was silly.
+  local reply
+  reply=$("$NVIM" --server "$socket" --remote-expr \
+    "luaeval(\"require('kebab.agent').remote(_A)\", $(vim_str "$request"))") || \
+    die "could not reach the instance at $socket"
+
+  local code=${reply%%$'\n'*}
+  local out=${reply#*$'\n'}
+  [ "$out" = "$reply" ] && out=""
+  [ -n "$out" ] && printf '%s\n' "$out"
+  case "$code" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return "$code" ;;
+  esac
+}
+
+server=""
+if [ "${1-}" = "--server" ]; then
+  [ $# -ge 2 ] || die "--server needs a socket path"
+  server=$2
+  shift 2
+fi
+
+cmd=${1-}
+case "$cmd" in
+  -h | --help | help)
+    usage
+    ;;
+
+  -V | --version | version)
+    printf 'kebab %s\n' "$VERSION"
+    ;;
+
+  list)
+    run_headless "lua require('kebab.cli').print_and_quit(require('kebab.cli').list_lines())"
+    ;;
+
+  types)
+    shift
+    prompts=false
+    [ "${1-}" = "--prompts" ] && prompts=true
+    run_headless "lua require('kebab.cli').print_and_quit(require('kebab.cli').type_lines({ prompts = $prompts }))"
+    ;;
+
+  doctor)
+    run_headless "lua local c = require('kebab.cli'); local l, ok = c.doctor_lines(); c.print_and_quit(l, ok)"
+    ;;
+
+  open)
+    shift
+    run_editor "lua require('kebab.cli').open($(lua_str "${1-}"))"
+    ;;
+
+  new)
+    shift
+    name=${1-}
+    [ $# -gt 0 ] && shift || true
+    type=""
+    dir=""
+    no_open=""
+    declare -A answers=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --type) [ $# -ge 2 ] || die "--type needs a value"; type=$2; shift 2 ;;
+        --dir)  [ $# -ge 2 ] || die "--dir needs a value";  dir=$2;  shift 2 ;;
+        --no-open) no_open=1; shift ;;
+        --*)
+          # Any other --name value answers a prompt the project type declares,
+          # so a language that adds a question needs no change here. `kebab
+          # types --prompts` lists what each type asks.
+          key=${1#--}
+          case "$key" in
+            ""|*[!a-zA-Z0-9_-]*) die "not a valid option name: $1" ;;
+          esac
+          [ $# -ge 2 ] || die "$1 needs a value"
+          answers[${key//-/_}]=$2
+          shift 2
+          ;;
+        *) die "unknown argument for 'new': $1" ;;
+      esac
+    done
+
+    spec="name = $(lua_str "$name")"
+    [ -n "$type" ] && spec="$spec, type = $(lua_str "$type")"
+    [ -n "$dir" ] && spec="$spec, dest = $(lua_str "$dir")"
+    if [ ${#answers[@]} -gt 0 ]; then
+      parts=""
+      for k in "${!answers[@]}"; do
+        [ -n "$parts" ] && parts="$parts, "
+        parts="$parts$k = $(lua_str "${answers[$k]}")"
+      done
+      spec="$spec, answers = { $parts }"
+    fi
+    if [ -n "$no_open" ]; then
+      run_headless "lua require('kebab.cli').create_and_quit({ $spec })"
+    else
+      run_editor "lua require('kebab.cli').new({ $spec })"
+    fi
+    ;;
+
+  diagnostics | definition | references | symbols | hover)
+    shift
+    parse_query_flags "$@"
+    [ ${#QUERY_ARGS[@]} -gt 0 ] || die "$cmd needs a file"
+    if [ -n "$server" ]; then
+      run_remote "$server" "$cmd" "${QUERY_ARGS[@]}"
+      exit $?
+    fi
+    # One-shot: boot, let a language server attach, answer, quit. Fine for
+    # gopls and friends (~200ms); for jdtls use `kebab serve`, which indexes once.
+    args_lua=""
+    for a in "${QUERY_ARGS[@]}"; do
+      [ -n "$args_lua" ] && args_lua="$args_lua, "
+      args_lua="$args_lua$(lua_str "$a")"
+    done
+    "$NVIM" --headless -n \
+      -c "lua require('kebab.agent').main($(lua_str "$cmd"), { $args_lua }, $(query_opts_lua))" 2>&1
+    exit $?
+    ;;
+
+  serve)
+    shift
+    socket=$(default_socket)
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --socket) [ $# -ge 2 ] || die "--socket needs a value"; socket=$2; shift 2 ;;
+        *) die "unknown option for 'serve': $1" ;;
+      esac
+    done
+    if [ ${#socket} -gt 100 ]; then
+      die "socket path is too long for a unix socket (${#socket} chars): $socket"
+    fi
+    [ -S "$socket" ] && die "something is already listening at $socket"
+    rm -f "$socket"
+    printf 'kebab: listening on %s — query it with: kebab --server %s diagnostics <file>\n' \
+      "$socket" "$socket" >&2
+    exec "$NVIM" --headless -n --listen "$socket" \
+      -c "lua vim.wait(120000, function() return _G.LazyVim ~= nil end, 50)"
+    ;;
+
+  "")
+    # No arguments: open the IDE where we stand, with the project tree showing,
+    # the way a graphical IDE opens a folder.
+    run_editor "lua require('kebab.project').open_dir(vim.fn.getcwd())"
+    ;;
+
+  -*)
+    die "unknown option: $cmd (try 'kebab help')"
+    ;;
+
+  *)
+    # Anything else is treated as a path or a project name.
+    run_editor "lua require('kebab.cli').open($(lua_str "$cmd"))"
+    ;;
+esac

@@ -1,0 +1,335 @@
+-- The semantic queries an agent uses, and their CLI contract.
+--
+-- Read-only by design: nothing here writes to the working tree, so an agent
+-- driving it unattended cannot damage a repository. The tests assert that too.
+local H = ...
+local agent = require("kebab.agent")
+local lsp = require("kebab.lsp")
+
+---A tiny Go project. Go because gopls attaches in under 100ms, where jdtls
+---needs up to 150s to import a Maven project -- that difference is the reason
+---`kebab serve` exists, and it would make this spec unusable.
+local fixture_dir
+
+local function requires_go()
+  if vim.fn.executable("go") == 0 then
+    H.skip("go is needed for a project gopls will attach to")
+  end
+  if not vim.uv.fs_stat(vim.fn.stdpath("data") .. "/mason/bin/gopls")
+    and vim.fn.executable("gopls") == 0 then
+    H.skip("gopls is not installed")
+  end
+end
+
+local function fixture()
+  if fixture_dir then
+    return fixture_dir
+  end
+  local dir = H.tmpdir("agent-go")
+  local res = vim.system({ "go", "mod", "init", "example.com/agent" }, { cwd = dir, text = true })
+    :wait(60000)
+  H.eq(0, res.code, "go mod init failed: " .. tostring(res.stderr))
+  H.write(dir .. "/main.go", table.concat({
+    "package main",
+    "",
+    'import "fmt"',
+    "",
+    "func greet(name string) string {",
+    '\treturn "hi " + name',
+    "}",
+    "",
+    "func main() {",
+    '\tfmt.Println(greet("world"))',
+    "\tvar unused int",
+    "}",
+  }, "\n"))
+  fixture_dir = dir
+  return dir
+end
+
+---Run a query with the fixture as the working directory.
+local function in_fixture(fn)
+  local dir = fixture()
+  local saved = vim.fn.getcwd()
+  vim.cmd("cd " .. vim.fn.fnameescape(dir))
+  local ok, err = pcall(fn, dir)
+  pcall(vim.cmd, "cd " .. vim.fn.fnameescape(saved))
+  if not ok then
+    error(err, 0)
+  end
+end
+
+H.describe("parsing a position", function()
+  H.it("reads path:line:col", function()
+    H.eq({ "src/Main.java", 42, 18 }, { lsp.parse_position("src/Main.java:42:18") })
+  end)
+
+  H.it("defaults the column", function()
+    H.eq({ "a.go", 7, 1 }, { lsp.parse_position("a.go:7") })
+  end)
+
+  H.it("keeps a path that contains a colon", function()
+    local path, line, col = lsp.parse_position("weird:dir/a.go:3:4")
+    H.eq("weird:dir/a.go", path)
+    H.eq(3, line)
+    H.eq(4, col)
+  end)
+
+  H.it("explains anything else", function()
+    for _, bad in ipairs({ "", "nonsense", "a.go:" }) do
+      local path, _, _, err = lsp.parse_position(bad)
+      H.falsy(path, ("%q should not parse"):format(bad))
+      H.ok(err and err ~= "")
+    end
+  end)
+end)
+
+H.describe("the command set", function()
+  H.it("is read-only", function()
+    -- The guarantee: an agent cannot damage a repository through these.
+    H.eq({ "diagnostics", "definition", "references", "symbols", "hover" }, agent.COMMANDS)
+    for _, name in ipairs({ "rename", "format", "code-action", "edit", "write" }) do
+      H.falsy(agent.is_command(name), name .. " writes, so it must not be here")
+    end
+  end)
+
+  H.it("rejects an unknown command, listing the real ones", function()
+    local _, err = agent.query("nonsense", {})
+    H.matches("unknown command", err)
+    H.matches("diagnostics", err)
+  end)
+
+  H.it("says what each command needs", function()
+    H.matches("needs a file", (select(2, agent.query("diagnostics", {}))))
+    H.matches("path:line:col", (select(2, agent.query("definition", {}))))
+    H.matches("path:line:col", (select(2, agent.query("references", {}))))
+    H.matches("path:line:col", (select(2, agent.query("hover", {}))))
+  end)
+
+  H.it("reports a file that is not there, rather than an empty result", function()
+    -- An agent must be able to tell "no errors" from "could not check".
+    local _, err = agent.query("diagnostics", { "/definitely/missing.go" })
+    H.matches("no such file", err)
+  end)
+end)
+
+H.describe("diagnostics", function()
+  H.it("finds a real error, with its position and severity", function()
+    requires_go()
+    in_fixture(function()
+      local result, err = agent.query("diagnostics", { "main.go" })
+      H.ok(result, tostring(err))
+      H.ok(result.count >= 1, "gopls should report the unused variable")
+      H.ok(vim.tbl_contains(result.clients, "gopls"))
+      local found
+      for _, d in ipairs(result.diagnostics) do
+        if d.message:match("unused") then
+          found = d
+        end
+      end
+      H.ok(found, "expected the unused-variable diagnostic: " .. vim.inspect(result.diagnostics))
+      H.eq(11, found.line, "line numbers are 1-based, as a command line expects")
+      H.eq("error", found.severity, "a name, not the LSP's 1-4")
+      H.ok(found.col >= 1, "columns are 1-based too")
+    end)
+  end)
+
+  H.it("sorts by position, so the output is stable", function()
+    requires_go()
+    in_fixture(function()
+      local result = agent.query("diagnostics", { "main.go" })
+      local previous = 0
+      for _, d in ipairs(result.diagnostics) do
+        H.ok(d.line >= previous, "diagnostics should be in file order")
+        previous = d.line
+      end
+    end)
+  end)
+
+  H.it("says whether the server had settled", function()
+    requires_go()
+    in_fixture(function()
+      local result = agent.query("diagnostics", { "main.go" })
+      H.eq("boolean", type(result.settled),
+        "a clean file and a slow server look alike; the caller deserves to know which")
+    end)
+  end)
+end)
+
+H.describe("navigation", function()
+  H.it("finds where a symbol is defined", function()
+    requires_go()
+    in_fixture(function()
+      -- the greet( call on line 10
+      local result, err = agent.query("definition", { "main.go:10:14" })
+      H.ok(result, tostring(err))
+      H.eq(1, result.count)
+      H.eq(5, result.locations[1].line, "greet is declared on line 5")
+      H.matches("main%.go$", result.locations[1].file)
+    end)
+  end)
+
+  H.it("finds everywhere a symbol is used", function()
+    requires_go()
+    in_fixture(function()
+      local result, err = agent.query("references", { "main.go:5:6" })
+      H.ok(result, tostring(err))
+      H.ok(result.count >= 2, "the declaration and the call: " .. vim.inspect(result.locations))
+      local lines = vim.tbl_map(function(l) return l.line end, result.locations)
+      H.ok(vim.tbl_contains(lines, 5), "the declaration")
+      H.ok(vim.tbl_contains(lines, 10), "the call")
+    end)
+  end)
+
+  H.it("lists a file's symbols with their kinds", function()
+    requires_go()
+    in_fixture(function()
+      local result, err = agent.query("symbols", { "main.go" })
+      H.ok(result, tostring(err))
+      local by_name = {}
+      for _, s in ipairs(result.symbols) do
+        by_name[s.name] = s
+      end
+      H.ok(by_name.greet, "greet should be listed: " .. vim.inspect(result.symbols))
+      H.eq("Function", by_name.greet.kind, "a name, not the LSP's number")
+      H.eq(5, by_name.greet.line)
+      H.ok(by_name.main, "and main")
+    end)
+  end)
+
+  H.it("reports the type of a symbol", function()
+    requires_go()
+    in_fixture(function()
+      local result, err = agent.query("hover", { "main.go:5:6" })
+      H.ok(result, tostring(err))
+      H.matches("func greet", result.text, "hover should carry the signature")
+    end)
+  end)
+end)
+
+H.describe("rendering", function()
+  H.it("prints a diagnostic as file:line:col, so it is greppable", function()
+    local lines = agent.render_text("diagnostics", {
+      file = "/p/a.go",
+      clients = { "gopls" },
+      settled = true,
+      count = 1,
+      diagnostics = { {
+        file = "/p/a.go", line = 11, col = 6, severity = "error",
+        source = "compiler", message = "declared and not used",
+      } },
+    })
+    H.eq(1, #lines)
+    H.matches(":11:6: error: declared and not used %[compiler%]", lines[1])
+  end)
+
+  H.it("says so plainly when a file is clean", function()
+    local lines = agent.render_text("diagnostics", {
+      file = "/p/a.go", clients = { "gopls" }, settled = true, count = 0, diagnostics = {},
+    })
+    H.matches("no diagnostics", lines[1])
+  end)
+
+  H.it("warns when it might simply have been too early", function()
+    local lines = agent.render_text("diagnostics", {
+      file = "/p/a.go", clients = { "gopls" }, settled = false, count = 0, diagnostics = {},
+    })
+    H.matches("had not published", table.concat(lines, "\n"),
+      "silence and cleanliness must not look the same")
+  end)
+
+  H.it("prints locations one per line", function()
+    local lines = agent.render_text("definition", {
+      count = 2,
+      locations = { { file = "/p/a.go", line = 5, col = 6 }, { file = "/p/b.go", line = 1, col = 1 } },
+    })
+    H.eq(2, #lines)
+    H.matches(":5:6$", lines[1])
+  end)
+
+  H.it("indents nested symbols", function()
+    local lines = agent.render_text("symbols", {
+      file = "/p/a.go",
+      symbols = {
+        { name = "Thing", kind = "Struct", depth = 0, line = 1, col = 1 },
+        { name = "field", kind = "Field", depth = 1, line = 2, col = 2 },
+      },
+    })
+    H.matches("Thing %(Struct%)", lines[1])
+    H.matches("  field %(Field%)", lines[2])
+  end)
+end)
+
+H.describe("the CLI contract", function()
+  H.it("exits 0 when the query worked, whatever it found", function()
+    requires_go()
+    in_fixture(function()
+      local _, code = agent.report("diagnostics", { "main.go" }, {})
+      H.eq(0, code, "finding errors is a successful query")
+    end)
+  end)
+
+  H.it("exits 1 when the query itself failed", function()
+    local output, code = agent.report("diagnostics", { "/missing.go" }, {})
+    H.eq(1, code)
+    H.matches("error:", output)
+  end)
+
+  H.it("exits 1 on an error only when --exit-code is given", function()
+    requires_go()
+    in_fixture(function()
+      local _, plain = agent.report("diagnostics", { "main.go" }, {})
+      local _, gated = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      H.eq(0, plain)
+      H.eq(1, gated, "the pre-commit-check shape")
+    end)
+  end)
+
+  H.it("emits valid JSON with --json", function()
+    requires_go()
+    in_fixture(function()
+      local output = agent.report("diagnostics", { "main.go" }, { json = true })
+      local ok, decoded = pcall(vim.json.decode, output)
+      H.ok(ok, "output should be valid JSON: " .. output:sub(1, 200))
+      H.eq(true, decoded.ok)
+      H.eq("diagnostics", decoded.command)
+      H.eq("number", type(decoded.count))
+      H.eq("table", type(decoded.diagnostics))
+    end)
+  end)
+
+  H.it("reports a failure as JSON too, when asked for JSON", function()
+    local output, code = agent.report("diagnostics", { "/missing.go" }, { json = true })
+    H.eq(1, code)
+    local decoded = vim.json.decode(output)
+    H.eq(false, decoded.ok)
+    H.matches("no such file", decoded.error)
+  end)
+end)
+
+H.describe("the remote protocol", function()
+  H.it("returns the exit code on the first line, then the output", function()
+    -- One round trip and no parser on the caller's side; the output may itself
+    -- be JSON, which nesting would only have to be unwrapped again.
+    local reply = agent.remote(vim.json.encode({
+      command = "diagnostics", args = { "/missing.go" }, opts = {},
+    }))
+    local first = reply:match("^([^\n]*)")
+    H.eq("1", first, "the code comes first")
+    H.matches("no such file", reply)
+  end)
+
+  H.it("rejects a malformed request with code 2", function()
+    local reply = agent.remote("not json at all")
+    H.matches("^2\n", reply)
+    H.matches("malformed", reply)
+  end)
+
+  H.it("never throws, whatever it is handed", function()
+    for _, payload in ipairs({ "", "null", "[]", '{"command":null}', '{"command":"diagnostics"}' }) do
+      local ok, reply = pcall(agent.remote, payload)
+      H.ok(ok, ("remote(%q) threw: %s"):format(payload, tostring(reply)))
+      H.matches("^%d+\n", reply, "and still answers with a code")
+    end
+  end)
+end)
