@@ -155,26 +155,67 @@ query_opts_lua() {
   printf '{ %s }' "$parts"
 }
 
+# A query argument with its path made absolute, keeping any :line:col suffix.
+#
+# `Foo.java`, `src/Foo.java:10:4` and `/abs/Foo.java` all have to work, and a
+# Windows-style drive letter is not a concern here.
+absolute_query_arg() {
+  local arg=$1
+  local path=$arg
+  local suffix=""
+  # peel off :line:col or :line, if the part before it is not itself a file
+  if [[ $arg =~ ^(.*):([0-9]+):([0-9]+)$ ]]; then
+    path=${BASH_REMATCH[1]}
+    suffix=":${BASH_REMATCH[2]}:${BASH_REMATCH[3]}"
+  elif [[ $arg =~ ^(.*):([0-9]+)$ ]]; then
+    path=${BASH_REMATCH[1]}
+    suffix=":${BASH_REMATCH[2]}"
+  fi
+  case $path in
+    /*) printf '%s%s' "$path" "$suffix"; return 0 ;;
+  esac
+  # Only rewrite something that is actually here; anything else is passed
+  # through so the server can report it by the name the caller used.
+  if [ -e "$path" ]; then
+    printf '%s%s' "$(cd -- "$(dirname -- "$path")" 2>/dev/null && pwd -P)/$(basename -- "$path")" "$suffix"
+  else
+    printf '%s%s' "$path" "$suffix"
+  fi
+}
+
 # Run a query against a warm instance over Neovim's own RPC.
 run_remote() {
   local socket=$1 command=$2
   shift 2
   command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH"
-  [ -S "$socket" ] || die "no instance listening at $socket (start one with: kebab serve)"
+  # The socket is checked after the dry run below: a dry run should not need a
+  # live instance to tell you what it would send.
 
   # Arguments as JSON, so nothing has to be escaped three times over.
+  #
+  # Paths are made absolute *here*, in the caller's directory. The warm
+  # instance resolves a relative path against its own working directory -- it
+  # was started once, from some other shell -- so `cd project && kebab --server
+  # … diagnostics src/Foo.java` reported "no such file", or worse, silently
+  # answered about a different project's src/Foo.java. The one-shot path has no
+  # such problem because the shell spawns Neovim in the caller's cwd.
   local args_json="[" first=1
   for a in "$@"; do
     [ $first -eq 1 ] || args_json="$args_json,"
     first=0
-    args_json="$args_json$(json_str "$a")"
+    args_json="$args_json$(json_str "$(absolute_query_arg "$a")")"
   done
   args_json="$args_json]"
 
   if [ -n "${KEBAB_DRY_RUN:-}" ]; then
-    printf 'remote %s %s\n' "$command" "$*"
+    # The resolved arguments, not the ones typed: a path is made absolute in
+    # the caller's directory, which is the whole point of this path.
+    printf 'remote %s %s\n' "$command" "$args_json"
     return 0
   fi
+
+  [ -S "$socket" ] || die "no instance listening at $socket (start one with: kebab serve)"
+
   local timeout_json=""
   [ -n "$QUERY_TIMEOUT" ] && timeout_json=",\"attach_timeout\":$QUERY_TIMEOUT"
   local request

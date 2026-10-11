@@ -760,10 +760,22 @@ local function request(url, mode, arg, payload, timeout)
     end
   end
 
+  -- One request at a time per connection. vim.wait pumps vim.schedule
+  -- callbacks, so a second jdbc.run on the same URL used to start *inside* the
+  -- first one's wait -- sharing the single per-URL process, and whichever
+  -- timed out first called M.shutdown(url), killing the JVM mid-statement and
+  -- failing the other in-flight request. Nothing has been sent at this point,
+  -- so handing the caller back to the one-shot path is safe.
+  if d.busy then
+    return nil, "another request is still running on this connection", true
+  end
+  d.busy = true
+
   payload = payload or ""
   local done, result_ok, result_body = false, nil, nil
   d.queue[#d.queue + 1] = function(ok, body)
     done, result_ok, result_body = true, ok, body
+    d.busy = false
   end
 
   local header = ("%s\t%s\t%d\n"):format(mode, arg or "", #payload)
@@ -772,11 +784,13 @@ local function request(url, mode, arg, payload, timeout)
   end)
   if not wrote then
     -- The pipe was already broken, so the frame never went anywhere.
+    d.busy = false
     M.shutdown(url)
     return nil, "could not write to the JDBC process", true
   end
 
   local ok, reason = vim.wait(timeout or 120000, function() return done end, 10)
+  d.busy = false
   if not ok then
     -- A hung query leaves the stream mid-frame, so the process cannot be
     -- trusted for the next request.

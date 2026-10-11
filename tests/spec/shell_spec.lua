@@ -459,3 +459,63 @@ H.describe("bin/kebab KEBAB_DRY_RUN", function()
     compiles(lua_chunk(vim.trim(r.out)))
   end)
 end)
+
+-- The warm instance resolves a relative path against *its own* working
+-- directory -- it was started once, from some other shell -- so
+-- `cd project && kebab --server … diagnostics src/Foo.java` reported "no such
+-- file", or silently answered about a different project's src/Foo.java. The
+-- one-shot path has no such problem, which is why this went unnoticed.
+H.describe("bin/kebab --server paths", function()
+  local function dry_remote(args, cwd)
+    local cmd = { kebab, "--server", "/nonexistent-kebab.sock" }
+    vim.list_extend(cmd, args)
+    local res = vim.system(cmd, {
+      text = true,
+      cwd = cwd,
+      env = { KEBAB_DRY_RUN = "1", KEBAB_PROJECT_ROOTS = "" },
+    }):wait(60000)
+    return vim.trim((res.stdout or "") .. (res.stderr or "")), res.code
+  end
+
+  H.it("makes a relative path absolute in the caller's directory", function()
+    local dir = H.tmpdir("server-rel")
+    vim.fn.mkdir(dir .. "/src", "p")
+    H.write(dir .. "/src/Foo.java", "class Foo {}")
+
+    local out, code = dry_remote({ "diagnostics", "src/Foo.java" }, dir)
+    H.eq(0, code, out)
+    H.matches(vim.pesc(vim.fn.resolve(dir)) .. "/src/Foo%.java", out, "got: " .. out)
+    H.falsy(out:find('"src/Foo.java"', 1, true), "the relative form must not be sent: " .. out)
+  end)
+
+  H.it("keeps a :line:col suffix while absolutising the path", function()
+    local dir = H.tmpdir("server-pos")
+    H.write(dir .. "/a.go", "package main")
+    local out, code = dry_remote({ "definition", "a.go:10:4" }, dir)
+    H.eq(0, code, out)
+    H.matches("/a%.go:10:4", out, "got: " .. out)
+    local out2 = dry_remote({ "definition", "a.go:7" }, dir)
+    H.matches("/a%.go:7", out2, "got: " .. out2)
+  end)
+
+  H.it("leaves an absolute path alone", function()
+    local dir = H.tmpdir("server-abs")
+    H.write(dir .. "/a.go", "package main")
+    local out = dry_remote({ "diagnostics", dir .. "/a.go" }, dir)
+    H.matches(vim.pesc(dir) .. "/a%.go", out)
+  end)
+
+  H.it("passes a path that does not exist through unchanged", function()
+    -- so the instance can report it by the name the caller used
+    local dir = H.tmpdir("server-missing")
+    local out = dry_remote({ "diagnostics", "nope.go" }, dir)
+    H.matches('"nope%.go"', out, "got: " .. out)
+  end)
+
+  H.it("does not need a live instance for a dry run", function()
+    local dir = H.tmpdir("server-dry")
+    H.write(dir .. "/a.go", "package main")
+    local _, code = dry_remote({ "diagnostics", "a.go" }, dir)
+    H.eq(0, code, "a dry run should not require a socket")
+  end)
+end)

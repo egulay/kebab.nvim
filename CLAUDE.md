@@ -267,6 +267,19 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **`vim.wait` pumps `vim.schedule` callbacks**, so a second `jdbc.run` on the
+  same URL used to start *inside* the first one's wait. The per-URL process is
+  a single slot and whichever request timed out first called `shutdown(url)`,
+  killing the JVM mid-statement and failing the other. `request` holds a
+  `busy` flag per daemon and hands a concurrent caller back to the one-shot
+  path, where nothing is shared.
+- A path given to `kebab --server` must be made **absolute by the caller**: the
+  warm instance resolves a relative one against its own cwd, so the same query
+  answered about a different project's `src/Foo.java`. `bin/kebab`'s
+  `absolute_query_arg` does it, keeping any `:line:col` suffix and passing a
+  non-existent path through unchanged.
+- In bash, `local a=$1 b=$a` does **not** see `a` -- `b` comes out empty. One
+  `local` per variable.
 - JDT's execution environments are **`JavaSE-1.8` and below for 8 and below**,
   `JavaSE-9` and up after that. `JavaSE-8` is rejected with "Invalid runtime for
   JavaSE-8" and the entry dropped -- so a Java 8 project was analysed against

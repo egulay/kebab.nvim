@@ -748,3 +748,54 @@ H.describe("running a script of several statements", function()
     H.eq(12, #sep, "the column should be 12 display columns wide, got " .. #sep)
   end)
 end)
+
+-- vim.wait pumps vim.schedule callbacks, so a second jdbc.run on the same URL
+-- used to start *inside* the first one's wait. The per-URL process is a single
+-- slot: whichever request timed out first called M.shutdown(url), killing the
+-- JVM mid-statement and failing the other in-flight request.
+H.describe("two requests on one connection", function()
+  local function requires_jdbc()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+  end
+
+  H.it("does not let the second corrupt or kill the first", function()
+    requires_jdbc()
+    local db = H.tmpdir("jdbc-reentrant") .. "/r.sqlite"
+    local res = vim.system({ "sqlite3", db }, {
+      stdin = "CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('alpha');",
+      text = true,
+    }):wait(30000)
+    H.eq(0, res.code, tostring(res.stderr))
+    local url = "jdbc:sqlite:" .. db
+
+    -- warm it, so the next request really goes to a live process
+    H.ok(J.run(url, "query", { stdin = "select 1", timeout = 120000 }))
+
+    -- fires inside the first request's vim.wait
+    local second = {}
+    vim.schedule(function()
+      second.lines, second.err = J.run(url, "query", { stdin = "select 'beta' as b", timeout = 60000 })
+    end)
+    local first, ferr = J.run(url, "query", { stdin = "select v from t", timeout = 60000 })
+
+    H.ok(first, "the first request must still be answered: " .. tostring(ferr))
+    H.matches("alpha", table.concat(first, "\n"), "and with its own result")
+
+    H.wait(60000, function()
+      return second.lines ~= nil or second.err ~= nil
+    end, "the second request should finish too")
+    H.ok(second.lines, "the second must not be lost: " .. tostring(second.err))
+    H.matches("beta", table.concat(second.lines, "\n"), "and get its own result, not the first's")
+
+    -- and the connection is still usable afterwards
+    local after, aerr = J.run(url, "query", { stdin = "select v from t", timeout = 60000 })
+    H.ok(after, "the process must survive both: " .. tostring(aerr))
+    H.matches("alpha", table.concat(after, "\n"))
+    J.shutdown(url)
+  end)
+end)
