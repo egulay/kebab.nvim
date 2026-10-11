@@ -603,3 +603,148 @@ H.describe("a request that times out", function()
     H.eq("1.5s", J.describe_timeout(1500))
   end)
 end)
+
+-- A multi-statement payload went to a single Statement.execute(), and SQLite's
+-- driver compiles only the first statement -- so everything after the first `;`
+-- silently never ran while the bridge reported success. A half-applied
+-- migration is the worst answer available, so the splitting is done in the
+-- bridge rather than hoped for from the driver.
+H.describe("running a script of several statements", function()
+  local db, url
+
+  local function requires_jdbc()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+  end
+
+  local function fixture()
+    if db then
+      return db, url
+    end
+    db = H.tmpdir("jdbc-script") .. "/s.sqlite"
+    local sql = table.concat({
+      "CREATE TABLE c (id INTEGER PRIMARY KEY, v TEXT);",
+      "CREATE TABLE user_data (a TEXT, b TEXT);",
+      "CREATE TABLE userXdata (zzz TEXT);",
+      "CREATE TABLE wide (name TEXT);",
+      "INSERT INTO wide (name) VALUES ('東京都中央区'),('ok');",
+      "CREATE TABLE blobs (b BLOB);",
+      "INSERT INTO blobs (b) VALUES (x'deadbeef');",
+    }, "\n")
+    local res = vim.system({ "sqlite3", db }, { stdin = sql, text = true }):wait(30000)
+    H.eq(0, res.code, "fixture creation failed: " .. tostring(res.stderr))
+    url = "jdbc:sqlite:" .. db
+    return db, url
+  end
+
+  local function run(sql)
+    local _, u = fixture()
+    return J.run(u, "query", { stdin = sql, timeout = 120000 })
+  end
+
+  local function count()
+    local lines = run("select count(*) from c")
+    return tonumber((table.concat(lines or {}, "\n"):match("(%d+)")))
+  end
+
+  H.it("applies every statement, not just the first", function()
+    requires_jdbc()
+    local before = count()
+    local lines, err = run("insert into c (v) values ('a');\ninsert into c (v) values ('b');")
+    H.ok(lines, tostring(err))
+    H.eq(2, select(2, table.concat(lines, "\n"):gsub("row affected", "")), "both inserts should report")
+    H.eq(before + 2, count(), "both rows should be there")
+  end)
+
+  H.it("does not split on a semicolon inside a literal or a comment", function()
+    requires_jdbc()
+    local before = count()
+    H.ok(run("insert into c (v) values ('a;b');"))
+    H.eq(before + 1, count())
+    local lines = run("select v from c where v = 'a;b'")
+    H.matches("a;b", table.concat(lines or {}, "\n"), "the literal should be intact")
+
+    -- a comment holding a semicolon, and a trailing one
+    local ok2, err2 = run("-- a comment with ; in it\nselect count(*) from c; /* trailing ; */")
+    H.ok(ok2, tostring(err2))
+    H.ok(run("select 1; -- just a comment"), "a trailing comment is not a statement")
+  end)
+
+  H.it("says which statement failed, and how many had applied", function()
+    requires_jdbc()
+    local before = count()
+    local lines, err = run("insert into c (v) values ('y'); insert into nosuch values (1);")
+    H.falsy(lines, "the script failed")
+    H.matches("statement 2 of 2", err, "it has to name the one that failed: " .. tostring(err))
+    H.matches("1 applied", err, "and say how far it got: " .. tostring(err))
+    H.eq(before + 1, count(), "the first statement really did apply")
+  end)
+
+  H.it("treats a comment-only payload as nothing to run", function()
+    requires_jdbc()
+    local lines, err = run("/* only a comment */")
+    H.falsy(lines)
+    H.matches("nothing to run", err)
+  end)
+
+  -- query() and columns() used to call System.exit(2), which in serve mode
+  -- killed the JVM mid-protocol: no reply, the shared connection never closed,
+  -- and every other request queued on it failed.
+  H.it("a bad request fails the request, not the warm process", function()
+    requires_jdbc()
+    local _, u = fixture()
+    H.ok(J.run(u, "query", { stdin = "select 1", timeout = 120000 }), "warm it up first")
+    local daemons = J.daemon_count()
+    H.ok(daemons > 0, "there should be a warm process")
+
+    local lines, err = J.run(u, "query", { stdin = "   ", timeout = 60000 })
+    H.falsy(lines)
+    H.matches("nothing to run", err)
+    H.eq(daemons, J.daemon_count(), "the warm process must survive a bad request")
+    H.ok(J.run(u, "query", { stdin = "select 1", timeout = 60000 }), "and still answer the next one")
+
+    local cols, cerr = J.run(u, "columns", { args = { "" }, timeout = 60000 })
+    H.falsy(cols)
+    H.matches("table name", cerr)
+    H.eq(daemons, J.daemon_count(), "same for a bad columns request")
+  end)
+
+  H.it("does not read `_` in a table name as a wildcard", function()
+    requires_jdbc()
+    local _, u = fixture()
+    local lines, err = J.run(u, "columns", { args = { "user_data" }, timeout = 60000 })
+    H.ok(lines, tostring(err))
+    local text = table.concat(lines, "\n")
+    H.matches("^a\t", text)
+    H.falsy(text:find("zzz"), "userXdata's column must not be attributed to user_data: " .. text)
+  end)
+
+  H.it("renders a blob as hex, not a Java identity hash", function()
+    requires_jdbc()
+    local lines, err = run("select b from blobs")
+    H.ok(lines, tostring(err))
+    local text = table.concat(lines, "\n")
+    H.matches("0xdeadbeef", text, "got: " .. text)
+    H.falsy(text:find("%[B@"), "an identity hash is a different value every run: " .. text)
+  end)
+
+  H.it("aligns a grid by display width, not UTF-16 length", function()
+    requires_jdbc()
+    local lines, err = run("select name from wide")
+    H.ok(lines, tostring(err))
+    -- the separator row is as wide as the widest cell, and a 6-character CJK
+    -- string occupies 12 columns
+    local sep
+    for _, l in ipairs(lines) do
+      if l:match("^%-+$") then
+        sep = l
+      end
+    end
+    H.ok(sep, "there should be a separator row: " .. table.concat(lines, "|"))
+    H.eq(12, #sep, "the column should be 12 display columns wide, got " .. #sep)
+  end)
+end)

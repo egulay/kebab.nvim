@@ -266,6 +266,26 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **A driver may compile only the first statement** of a multi-statement
+  payload -- SQLite's does -- so `Statement.execute(script)` silently ran one
+  insert of two and still reported success. `KebabJdbc.splitStatements` splits
+  on unquoted, uncommented semicolons (handling `''`/`""`/backticks, `--`,
+  `/* */` and Postgres `$tag$`) and runs each. A fragment of only comments is
+  not a statement -- handing one to SQLite raises "the prepared statement has
+  been finalized".
+- **Which statement failed goes in the exception message, not on stdout**:
+  serve mode buffers stdout and discards it when a request fails, so a note
+  printed there is lost. The message says "statement 2 of 2 failed (1
+  applied)", because the caller has to know how far a script got.
+- `System.exit()` inside a printer **kills the warm JVM mid-protocol**: no reply
+  frame, the shared connection never closed, every queued request failing. A
+  bad argument throws `UsageException`, which `main` maps to exit 2 and `serve`
+  turns into one failed request.
+- `DatabaseMetaData.getColumns/getTables` take **LIKE patterns**, so `_` in an
+  identifier matches any character: `user_data` also returned `userXdata`'s
+  columns. Escape with `md.getSearchStringEscape()`.
+- `String.length()` is UTF-16 units, not display columns, so a CJK cell skewed
+  the result grid. `KebabJdbc.displayWidth` is what `pad` uses.
 - **`vim.diagnostic.get()` must be read once, not twice.** Reading it in a
   `vim.wait` predicate and again to build the result is a race: a server
   republishing clears the set and sets it again, and the second read can land
