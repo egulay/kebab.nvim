@@ -376,6 +376,12 @@ case "$cmd" in
       die "socket path is too long for a unix socket (${#socket} chars): $socket"
     fi
     [ -S "$socket" ] && die "something is already listening at $socket"
+    # Only a stale socket is removed. The guard above rejects a *live* socket,
+    # but anything else at that path -- a regular file, someone's notes -- was
+    # deleted outright.
+    if [ -e "$socket" ] && [ ! -S "$socket" ]; then
+      die "$socket exists and is not a socket; refusing to remove it"
+    fi
     rm -f "$socket"
     printf 'kebab: listening on %s — query it with: kebab --server %s diagnostics <file>\n' \
       "$socket" "$socket" >&2

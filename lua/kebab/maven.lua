@@ -331,7 +331,10 @@ function M.add_to_file(path, dep)
   if crlf then
     updated = updated:gsub("\n", "\r\n")
   end
-  vim.fn.writefile(vim.split(updated, "\n", { plain = true }), path, "b")
+  local wrote, werr = require("kebab.fs").write_lines(path, vim.split(updated, "\n", { plain = true }), "b")
+  if not wrote then
+    return false, werr
+  end
   return true
 end
 

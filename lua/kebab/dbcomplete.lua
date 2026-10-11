@@ -94,7 +94,13 @@ function M.schema(url)
     return nil, failed.err
   end
 
-  local lines, err = jdbc.run(url, "schema", { timeout = 120000 })
+  -- vim.schedule defers onto the main loop, it does not move work off it, and
+  -- jdbc.run blocks. 120s would freeze the editor for two minutes on an
+  -- unreachable host the first time a completion is asked for; a completion
+  -- that cannot be answered quickly is not worth having, and the failure is
+  -- remembered below so it is paid at most once per cooldown.
+  local timeout = tonumber(vim.g.kebab_db_schema_timeout) or 15000
+  local lines, err = jdbc.run(url, "schema", { timeout = timeout })
   if not lines then
     failures[url] = { at = vim.uv.now(), err = err }
     return nil, err

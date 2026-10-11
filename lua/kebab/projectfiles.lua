@@ -82,8 +82,10 @@ function M.create(generator, dir, opts)
     return false, "Generator " .. tostring(generator.name) .. " produced nothing"
   end
 
-  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-  vim.fn.writefile(lines, path)
+  local wrote, werr = require("kebab.fs").write_lines(path, lines)
+  if not wrote then
+    return false, werr
+  end
   if opts.open ~= false then
     vim.cmd("edit " .. vim.fn.fnameescape(path))
   end

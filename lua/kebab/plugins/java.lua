@@ -58,8 +58,16 @@ return {
         local ok, sb = pcall(require, "spring_boot")
         if ok then
           config.init_options = config.init_options or {}
-          local bundles = config.init_options.bundles or {}
-          vim.list_extend(bundles, sb.java_extensions())
+          -- A *copy*: LazyVim hands the same bundles table over on every jdtls
+          -- attach, so extending it in place appended Spring's extensions
+          -- again each time -- a growing list of duplicates for the life of
+          -- the session.
+          local bundles = vim.deepcopy(config.init_options.bundles or {})
+          for _, jar in ipairs(sb.java_extensions() or {}) do
+            if not vim.tbl_contains(bundles, jar) then
+              bundles[#bundles + 1] = jar
+            end
+          end
           config.init_options.bundles = bundles
         end
         return config

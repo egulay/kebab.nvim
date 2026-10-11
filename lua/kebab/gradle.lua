@@ -292,7 +292,10 @@ function M.add_to_file(path, input, opts)
   if not updated then
     return false, ierr
   end
-  vim.fn.writefile(vim.split(updated, "\n"), path)
+  local wrote, werr = require("kebab.fs").write_lines(path, vim.split(updated, "\n"))
+  if not wrote then
+    return false, werr
+  end
   return true, ("Added %s to %s as %s")
     :format(dep.group .. ":" .. dep.artifact, vim.fn.fnamemodify(path, ":t"), configuration)
 end

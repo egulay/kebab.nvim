@@ -79,7 +79,14 @@ def find(node, name):
     return node.find("m:" + name, ns) if ns else node.find(name)
 def findall(node, name):
     return node.findall("m:" + name, ns) if ns else node.findall(name)
-deps = find(r, "dependencies")
+# Count them. ElementTree parses two sibling <dependencies> quite happily --
+# it is valid XML -- but Maven rejects it with "Duplicated tag: dependencies"
+# and the project stops building. find() returns the first, so the duplicate
+# this suite exists to catch was invisible.
+blocks = findall(r, "dependencies")
+if len(blocks) > 1:
+    print("DUPLICATES " + str(len(blocks))); sys.exit(0)
+deps = blocks[0] if blocks else None
 if deps is None:
     print("NONE"); sys.exit(0)
 for d in findall(deps, "dependency"):
@@ -90,6 +97,14 @@ for d in findall(deps, "dependency"):
 ]]
   local res = vim.system({ "python3", "-I", "-c", script, path }, { text = true }):wait(30000)
   H.eq(0, res.code, "the pom should still be valid XML:\n" .. (res.stderr or "") .. "\n" .. text)
+  local duplicates = (res.stdout or ""):match("DUPLICATES (%d+)")
+  H.falsy(
+    duplicates,
+    ("the pom has %s top-level <dependencies> blocks, which Maven refuses to parse:\n%s"):format(
+      tostring(duplicates),
+      text
+    )
+  )
   local out = {}
   for line in (res.stdout or ""):gmatch("[^\n]+") do
     if line ~= "NONE" then

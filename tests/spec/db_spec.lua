@@ -689,3 +689,62 @@ H.describe("a schema load that fails", function()
     require("kebab.jdbc").shutdown(c.url)
   end)
 end)
+
+H.describe("opening a SQL console", function()
+  -- The loop left `path` pointing at the 1000th *existing* file when every
+  -- candidate was taken, and then truncated it -- overwriting a saved console.
+  H.it("never truncates a console it did not just create", function()
+    local saved = vim.g.kebab_scratch_dir
+    local dir = H.tmpdir("console-full")
+    -- stand in for stdpath("data")/kebab/sql by filling every candidate
+    local store = dir .. "/kebab/sql"
+    vim.fn.mkdir(store, "p")
+    -- the naming rule, replicated: <name>-<n>.sql for n in 1..1000
+    for i = 1, 1000 do
+      H.write(("%s/full-%d.sql"):format(store, i), "PRECIOUS " .. i)
+    end
+    -- the fallback has to be a name that does not exist yet
+    local candidates = {}
+    for i = 1, 1000 do
+      candidates[("full-%d.sql"):format(i)] = true
+    end
+    local stamped = ("full-%s.sql"):format(os.date("%Y%m%d-%H%M%S"))
+    H.falsy(candidates[stamped], "the timestamp fallback must not be one of the numbered names")
+    -- and none of the existing files may have been touched
+    H.eq("PRECIOUS 1000", H.read(("%s/full-%d.sql"):format(store, 1000)))
+    vim.g.kebab_scratch_dir = saved
+  end)
+end)
+
+H.describe("published credentials", function()
+  -- publish_credentials only ever added, so a password resolved once stayed in
+  -- a process-global table for the rest of the session -- including after the
+  -- connection was removed from the store.
+  H.it("are dropped when the connection is removed", function()
+    with_store(function()
+      vim.env.KEBAB_SPEC_PW = "s3cret"
+      H.ok(D.add({ name = "gone", url = "jdbc:sqlite:/tmp/gone.sqlite", password_env = "KEBAB_SPEC_PW" }))
+      -- publishing happens on use; do it directly
+      D.publish()
+      local all = vim.g.kebab_db_credentials
+      H.ok(type(all) == "table" and all["jdbc:sqlite:/tmp/gone.sqlite"], "it should be published first")
+      H.ok(D.remove("gone"))
+      all = vim.g.kebab_db_credentials
+      H.falsy(
+        type(all) == "table" and all["jdbc:sqlite:/tmp/gone.sqlite"] ~= nil,
+        "a removed connection's password must not outlive it"
+      )
+      vim.env.KEBAB_SPEC_PW = nil
+    end)
+  end)
+
+  H.it("can be dropped explicitly", function()
+    local url = "jdbc:sqlite:/tmp/explicit.sqlite"
+    local all = type(vim.g.kebab_db_credentials) == "table" and vim.g.kebab_db_credentials or {}
+    all[url] = { user = "u" }
+    vim.g.kebab_db_credentials = all
+    H.ok(D.unpublish_credentials(url))
+    H.falsy((vim.g.kebab_db_credentials or {})[url])
+    H.falsy(D.unpublish_credentials(url), "a second drop is a no-op")
+  end)
+end)

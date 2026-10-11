@@ -66,6 +66,7 @@ lua/kebab/
 ├── git.lua              the hand-rolled revert, testable without a tree window
 ├── path.lua             expand a path WITHOUT vim.fn.expand's shell expansion
 ├── jsonfile.lua         pretty-print JSON for a hand-editable file; jq optional
+├── fs.lua               write/read a file that REPORTS instead of raising E482
 ├── run.lua              marker gating for language tasks (overseer provider)
 ├── menus/
 │   ├── action.lua       introspectable menu actions -- build every entry here
@@ -267,6 +268,26 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **`vim.fn.writefile` raises E482, and `mkdir` raises E739** -- neither
+  returns a code. Every write goes through `kebab.fs.write_lines`, which
+  reports instead, because a build function that throws never calls its `done`
+  and a dependency gets reported as added when the file was never written.
+  Do not add a `vim.fn.mkdir` beside it; `write_lines` does that part safely.
+- **Reverting a rename is restore-the-old plus remove-the-new.** The porcelain
+  `-z` record gives the new name first, then the old, and `git checkout HEAD --
+  <new>` can never work -- HEAD has never heard of it. Deleting the file is not
+  enough either: the new name is a staged addition, so `git rm -f` is what
+  clears the index entry too. `plan.renamed` carries the pairs.
+- A **JDBC URL can carry inline credentials**, and argv is in the process list,
+  so `KebabJdbc` takes `-` as the url argument and reads `KEBAB_DB_URL` from
+  the environment. `jdbc.spawn_env` is what every spawn path passes.
+- A malformed frame in the serve loop **cannot be answered and recovered from**:
+  the payload bytes it declared are still in the stream, so the next read takes
+  them as a header. The loop closes the connection instead.
+- `vim.schedule` **defers onto the main loop, it does not move work off it**, so
+  the "off the main loop" schema fetch still blocks. It is bounded at 15s
+  (`vim.g.kebab_db_schema_timeout`) and the failure is cached, so an
+  unreachable host costs that once per cooldown rather than 120s per keystroke.
 - An LSP `character` offset is in the **server's offset encoding**, not bytes.
   Every server here negotiates utf-16, so `character + 1` was wrong on any line
   with non-ASCII before the symbol -- and it disagreed with `diagnostics`,

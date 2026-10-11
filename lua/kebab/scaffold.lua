@@ -66,8 +66,9 @@ end
 ---@param path string
 ---@param lines string[]
 function M.write_file(path, lines)
-  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-  vim.fn.writefile(lines, path)
+  -- Reports rather than raising: writefile throws E482, and a build function
+  -- that throws never calls its `done`.
+  return require("kebab.fs").write_lines(path, lines)
 end
 
 ---mkdir -p

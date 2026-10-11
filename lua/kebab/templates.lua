@@ -216,8 +216,10 @@ function M.create(template, dir, name, opts)
     return false, "Template " .. tostring(template.name) .. " produced nothing"
   end
 
-  vim.fn.mkdir(vim.fn.fnamemodify(ctx.path, ":h"), "p")
-  vim.fn.writefile(lines, ctx.path)
+  local wrote, werr = require("kebab.fs").write_lines(ctx.path, lines)
+  if not wrote then
+    return false, werr
+  end
 
   if opts.open ~= false then
     vim.cmd("edit " .. vim.fn.fnameescape(ctx.path))

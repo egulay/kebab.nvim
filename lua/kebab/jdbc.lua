@@ -561,7 +561,11 @@ function M.command(url, mode, extra)
   if not classpath then
     return nil, err
   end
-  local argv = { "java", "-cp", classpath, "KebabJdbc", mode, url }
+  -- "-" rather than the URL itself: argv shows up in the process list, and a
+  -- URL can carry inline credentials (jdbc:...?user=x&password=y). The JVM
+  -- reads it from KEBAB_DB_URL, which every spawn path sets through
+  -- M.credentials_env.
+  local argv = { "java", "-cp", classpath, "KebabJdbc", mode, "-" }
   for _, a in ipairs(extra or {}) do
     argv[#argv + 1] = a
   end
@@ -588,7 +592,7 @@ function M.vim_command(url, mode)
   -- is not a new exposure -- the value is already in this process's
   -- environment, which is where `password_env` is read from in the first
   -- place; this only gives it the second name the JVM looks for.
-  for key, value in pairs(M.credentials_env(url) or {}) do
+  for key, value in pairs(M.spawn_env(url)) do
     vim.env[key] = value
   end
   return { ok = true, argv = argv }
@@ -631,10 +635,12 @@ function M.run_oneshot(url, mode, opts)
   if not argv then
     return nil, err
   end
+  -- vim.system MERGES env, so this adds to the real one rather than replacing
+  -- it; the URL travels here, not in argv.
   local res = vim.system(argv, {
     text = true,
     stdin = opts.stdin or "",
-    env = M.credentials_env(url),
+    env = M.spawn_env(url),
   }):wait(opts.timeout or 120000)
   if res.code ~= 0 then
     return nil, vim.trim((res.stderr or "") .. (res.stdout or ""))
@@ -800,7 +806,7 @@ local function start_daemon(url)
   for key, value in pairs(vim.fn.environ()) do
     env[#env + 1] = key .. "=" .. value
   end
-  for key, value in pairs(M.credentials_env(url) or {}) do
+  for key, value in pairs(M.spawn_env(url)) do
     env[#env + 1] = key .. "=" .. value
   end
 
@@ -975,6 +981,17 @@ function M.credentials_env(url)
     env.KEBAB_DB_PASSWORD = creds[url].password
   end
   return next(env) and env or nil
+end
+
+---Everything the JVM needs in its environment, including the URL itself.
+---
+---The URL is not in argv: argv is visible in the process list and a JDBC URL
+---can carry inline credentials.
+---@param url string
+function M.spawn_env(url)
+  local env = M.credentials_env(url) or {}
+  env.KEBAB_DB_URL = url
+  return env
 end
 
 ---Build a JDBC URL from a driver and its parts.

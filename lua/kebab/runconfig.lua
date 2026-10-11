@@ -169,9 +169,11 @@ function M.save(root, configs)
     end
   end
   local path = M.file(root)
-  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
   local encoded = vim.json.encode({ configurations = configs })
-  vim.fn.writefile(require("kebab.jsonfile").pretty(encoded), path)
+  local wrote, werr = require("kebab.fs").write_lines(path, require("kebab.jsonfile").pretty(encoded))
+  if not wrote then
+    return false, werr
+  end
   return true
 end
 

@@ -73,15 +73,25 @@ H.describe("kebab.git revert_plan", function()
       "the quotes git adds around the path must be stripped")
   end)
 
-  H.it("resolves a rename to the name that exists on disk", function()
+  -- The new name cannot be the one checked out: HEAD has never heard of it, so
+  -- `git checkout HEAD -- new.txt` fails with "pathspec did not match any
+  -- file(s) known to git" and the whole revert was reported as failed.
+  -- Reverting a rename means restoring the old name and removing the new one.
+  H.it("plans a rename as restore-the-old, remove-the-new", function()
     local repo, g = H.git_repo("renamed")
     H.write(repo .. "/old.txt", "content")
     g("add", "old.txt")
     g("commit", "-q", "-m", "add old")
     g("mv", "old.txt", "new.txt")
     local plan = git.revert_plan(repo)
-    H.ok(vim.tbl_contains(plan.modified, "new.txt"),
-      "expected new.txt in " .. vim.inspect(plan.modified))
+    H.ok(vim.tbl_contains(plan.modified, "old.txt"),
+      "the old name is what HEAD knows: " .. vim.inspect(plan.modified))
+    H.falsy(vim.tbl_contains(plan.modified, "new.txt"),
+      "checking out the new name cannot work: " .. vim.inspect(plan.modified))
+    H.eq(1, #plan.renamed)
+    H.eq("old.txt", plan.renamed[1].from)
+    H.eq("new.txt", plan.renamed[1].to)
+    H.matches("rename", git.describe_plan(plan), "and the prompt should say so")
   end)
 
   H.it("records the repository root, not the clicked directory", function()
@@ -233,15 +243,26 @@ H.describe("reverting paths git has to quote", function()
     H.eq("EDITED", H.read(repo .. "/routes/s/page.svelte"), "the sibling route must be untouched")
   end)
 
-  H.it("does not treat a rename's old name as a separate change", function()
+  H.it("reverts a rename completely, index included", function()
     local repo, g = H.git_repo("git-rename-z")
     H.write(repo .. "/old.txt", "orig")
+    H.write(repo .. "/other.txt", "keep")
     g("add", "-A")
     g("commit", "-q", "-m", "add")
     g("mv", "old.txt", "new.txt")
+    H.write(repo .. "/other.txt", "EDITED")
+
     local plan = git.revert_plan(repo)
-    H.ok(vim.tbl_contains(plan.modified, "new.txt"), vim.inspect(plan.modified))
-    H.falsy(vim.tbl_contains(plan.modified, "old.txt"), "the old name is not on disk: " .. vim.inspect(plan.modified))
+    local ok, failed = git.apply_revert(plan)
+    H.ok(ok, vim.inspect(failed))
+    H.ok(H.exists(repo .. "/old.txt"), "the old name should be back")
+    H.eq("orig", H.read(repo .. "/old.txt"))
+    H.falsy(H.exists(repo .. "/new.txt"), "and the new one gone")
+    H.eq("keep", H.read(repo .. "/other.txt"), "the unrelated edit is discarded too")
+    -- deleting the file is not enough: the rename is a staged addition, so the
+    -- index entry has to go as well or the tree is left dirty
+    local status = git.run(repo, { "status", "--porcelain" })
+    H.eq({}, status, "the tree should be clean: " .. vim.inspect(status))
   end)
 end)
 

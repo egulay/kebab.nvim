@@ -103,9 +103,11 @@ function M.save(connections)
     end
   end
   local path = M.store_path()
-  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
   local encoded = vim.json.encode({ connections = connections })
-  vim.fn.writefile(require("kebab.jsonfile").pretty(encoded), path)
+  local wrote, werr = require("kebab.fs").write_lines(path, require("kebab.jsonfile").pretty(encoded))
+  if not wrote then
+    return false, werr
+  end
   -- a connections file may hold a username; keep it to the owner
   pcall(vim.uv.fs_chmod, path, 384) -- 0600
   return true
@@ -167,10 +169,11 @@ function M.remove(name)
     if c.name == name then
       table.remove(list, i)
       -- Its warm process is holding a connection to a database we are
-      -- forgetting about.
+      -- forgetting about, and its password should not outlive it either.
       pcall(function()
         require("kebab.jdbc").shutdown(c.url)
       end)
+      M.unpublish_credentials(c.url)
       local ok, err = M.save(list)
       return ok, err
     end
@@ -206,6 +209,22 @@ local function publish_credentials(c)
   all[c.url] = creds
   vim.g.kebab_db_credentials = all
   return warn
+end
+
+---Drop a connection's published credentials.
+---
+---They used to accumulate: publish_credentials only ever added, so a password
+---resolved once stayed in a process-global table for the rest of the session,
+---including after the connection was removed from the store.
+---@param url string
+function M.unpublish_credentials(url)
+  local all = vim.g.kebab_db_credentials
+  if type(all) ~= "table" or all[url] == nil then
+    return false
+  end
+  all[url] = nil
+  vim.g.kebab_db_credentials = all
+  return true
 end
 
 -- ------------------------------------------------------------------ dadbod
@@ -554,14 +573,28 @@ function M.console()
   M.current(function(c)
     local dir = vim.fn.stdpath("data") .. "/kebab/sql"
     vim.fn.mkdir(dir, "p")
+    -- The loop used to leave `path` pointing at the 1000th *existing* file
+    -- when every candidate was taken, and then truncate it -- overwriting a
+    -- saved console. A timestamp cannot collide, and nothing is written over.
+    local stem = c.name:gsub("[^%w%-_]", "_")
     local path
     for i = 1, 1000 do
-      path = ("%s/%s-%d.sql"):format(dir, c.name:gsub("[^%w%-_]", "_"), i)
-      if not vim.uv.fs_stat(path) then
+      local candidate = ("%s/%s-%d.sql"):format(dir, stem, i)
+      if not vim.uv.fs_stat(candidate) then
+        path = candidate
         break
       end
     end
-    vim.fn.writefile({ ("-- %s"):format(c.name), "", "" }, path)
+    if not path then
+      path = ("%s/%s-%s.sql"):format(dir, stem, os.date("%Y%m%d-%H%M%S"))
+      if vim.uv.fs_stat(path) then
+        path = ("%s/%s-%s.sql"):format(dir, stem, tostring(vim.uv.hrtime()))
+      end
+    end
+    local wrote, werr = require("kebab.fs").write_lines(path, { ("-- %s"):format(c.name), "", "" })
+    if not wrote then
+      return vim.notify(werr, vim.log.levels.ERROR)
+    end
     vim.cmd("edit " .. vim.fn.fnameescape(path))
     vim.bo.filetype = "sql"
     M.attach(c)

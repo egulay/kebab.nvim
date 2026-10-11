@@ -55,7 +55,18 @@ public final class KebabJdbc {
       System.exit(2);
     }
     String mode = args[0];
+    // "-" means "read the URL from KEBAB_DB_URL". argv is world-readable in
+    // the process list, so a URL carrying inline credentials -- which some
+    // drivers accept, e.g. jdbc:...?user=x&password=y -- must not be passed
+    // that way. The env is per process and not listed.
     String url = args[1];
+    if ("-".equals(url)) {
+      url = System.getenv("KEBAB_DB_URL");
+      if (url == null || url.isBlank()) {
+        System.err.println("KEBAB_DB_URL is not set, and the url argument was \"-\"");
+        System.exit(2);
+      }
+    }
 
     Properties props = new Properties();
     // Credentials come through the environment, never the command line, so they
@@ -112,10 +123,14 @@ public final class KebabJdbc {
       if (header.isEmpty()) {
         continue;
       }
+      // A malformed header cannot be recovered from by replying and carrying
+      // on: the payload bytes it declared are still in the stream, and the
+      // next read would take them as a header. Everything after that is
+      // garbage, so stop rather than answer nonsense with confidence.
       String[] parts = header.split("\t", -1);
       if (parts.length < 3) {
-        respond(out, false, "malformed request header");
-        continue;
+        respond(out, false, "malformed request header; closing the connection");
+        return;
       }
       String mode = parts[0];
       String arg = parts[1];
@@ -123,8 +138,12 @@ public final class KebabJdbc {
       try {
         length = Integer.parseInt(parts[2].trim());
       } catch (NumberFormatException e) {
-        respond(out, false, "malformed payload length");
-        continue;
+        respond(out, false, "malformed payload length; closing the connection");
+        return;
+      }
+      if (length < 0) {
+        respond(out, false, "negative payload length; closing the connection");
+        return;
       }
       String payload = readExactly(in, length);
       if (payload == null) {

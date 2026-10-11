@@ -90,7 +90,7 @@ function M.revert_plan(path)
     fields[#fields + 1] = field
   end
 
-  local plan = { root = root, path = path, modified = {}, untracked = {} }
+  local plan = { root = root, path = path, modified = {}, untracked = {}, renamed = {} }
   local i = 1
   while i <= #fields do
     local entry = fields[i]
@@ -98,12 +98,21 @@ function M.revert_plan(path)
     if entry ~= "" then
       local code, rel = entry:sub(1, 2), entry:sub(4)
       -- A rename or copy spends two fields: the new path, then the old one.
-      -- The new path is what is on disk, and the old one must not be reverted
-      -- as if it were a separate change.
       if code:sub(1, 1) == "R" or code:sub(1, 1) == "C" then
+        local from = fields[i]
         i = i + 1
-      end
-      if code == "??" then
+        -- Reverting a rename means restoring the old name and removing the new
+        -- one. Putting the *new* name in `modified` could never work: it is
+        -- what `git checkout HEAD --` is asked for, and HEAD has never heard
+        -- of it -- "pathspec did not match any file(s) known to git", which
+        -- then reported the whole revert as failed.
+        if type(from) == "string" and from ~= "" then
+          plan.modified[#plan.modified + 1] = from
+          plan.renamed[#plan.renamed + 1] = { from = from, to = rel }
+        else
+          plan.modified[#plan.modified + 1] = rel
+        end
+      elseif code == "??" then
         plan.untracked[#plan.untracked + 1] = root .. "/" .. rel
       else
         plan.modified[#plan.modified + 1] = rel
@@ -156,6 +165,9 @@ function M.describe_plan(plan)
   if #plan.modified > 0 then
     parts[#parts + 1] = ("discard changes in %d tracked file(s)"):format(#plan.modified)
   end
+  if plan.renamed and #plan.renamed > 0 then
+    parts[#parts + 1] = ("undo %d rename(s)"):format(#plan.renamed)
+  end
   if #plan.untracked > 0 then
     local files, dirs = 0, 0
     for _, abs in ipairs(plan.untracked) do
@@ -194,6 +206,15 @@ function M.apply_revert(plan)
     end
   end
 
+  -- A rename's new name is a staged addition, so deleting the file is not
+  -- enough -- the index entry has to go too, or the rename is half-reverted.
+  for _, rename in ipairs(plan.renamed or {}) do
+    local out, err = M.run(plan.root, { "rm", "-f", "--quiet", "--", M.literal(rename.to) })
+    if not out then
+      failed[#failed + 1] = ("git rm %s: %s"):format(rename.to, tostring(err))
+    end
+  end
+
   if #failed > 0 and #plan.untracked > 0 then
     failed[#failed + 1] = ("%d untracked file(s) were NOT deleted, because restoring the tracked files failed"):format(
       #plan.untracked
@@ -211,7 +232,7 @@ end
 
 ---True when `plan` would change nothing.
 function M.is_empty(plan)
-  return #plan.modified == 0 and #plan.untracked == 0
+  return #plan.modified == 0 and #plan.untracked == 0 and #(plan.renamed or {}) == 0
 end
 
 return M

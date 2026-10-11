@@ -519,3 +519,17 @@ H.describe("bin/kebab --server paths", function()
     H.eq(0, code, "a dry run should not require a socket")
   end)
 end)
+
+H.describe("kebab serve and the socket path", function()
+  -- The guard rejected a path that was already a live socket, but anything
+  -- else there -- a regular file, someone's notes -- was rm -f'd outright.
+  H.it("refuses to remove something that is not a socket", function()
+    local path = "/tmp/kebab-spec-notasocket"
+    H.write(path, "my notes")
+    local res = vim.system({ kebab, "serve", "--socket", path }, { text = true }):wait(60000)
+    H.ok(res.code ~= 0, "it should refuse")
+    H.matches("not a socket", (res.stdout or "") .. (res.stderr or ""))
+    H.eq("my notes", H.read(path), "the file must survive")
+    vim.fn.delete(path)
+  end)
+end)
