@@ -119,17 +119,58 @@ a formatter -- which on reflection is the feature rather than a flaw.
   found by brace matching rather than a pattern, so `buildscript { }` and
   `subprojects { }` are not mistaken for the project's own.
 
-- **The LSP and gitsigns shortcuts the menu advertises are not covered.**
-  `tests/spec/menu_shortcuts_spec.lua` checks every key the editor menu prints,
-  but the buffer-local ones (`<leader>ca`, `gd`, `<leader>gh*`) are listed as
-  exceptions rather than verified, because that needs a language server attached
-  and a tracked file open. Worth closing with a real fixture project.
+- ~~**The LSP and gitsigns shortcuts the menu advertises are not covered.**~~
+  Done. `menu_shortcuts_spec` now opens a real tracked file for the
+  `<leader>gh*` keys and a real Go module for `gd`/`gI`/`gr`/`<leader>ca`/
+  `<leader>cr`, and asserts each is bound *in that buffer* once gitsigns or the
+  language server has attached. The BUFFER_LOCAL list still asserts they are
+  not global; this asserts they exist where they are supposed to.
+
+- **`nvzone/menu` is still the weakest dependency.** See above. If it ever goes
+  unmaintained, `menus/action.lua` is the seam: every entry is already a
+  described action, so a different renderer is a rewrite of the renderer only.
+
+## The code review
+
+A full review of the layer was run and its findings worked through: 138
+distinct findings, of which every one at **high** severity and every one upheld
+by the verification pass is fixed, down to the medium and low ones and the
+false tests among them. The suite went from 887 assertions to 1051.
+
+What it found, in one line each, is in the git log. The categories worth
+remembering are in CLAUDE.md under "Rules learned the hard way" — they are the
+traps, not the fixes.
+
+Three things it surfaced that are worth keeping in mind for any new code here:
+
+- **A false test is worse than no test.** Several assertions could not fail:
+  one compared kebab's own two constants, one iterated a list that was always
+  empty, one filtered the keys it checked so narrowly that every broken one was
+  excluded. Each hid a real bug.
+- **Verify against the real tool.** A generated `.gitignore`, a package clause,
+  a Dockerfile, a pom — all rendered fine and were rejected by git, javac, go,
+  docker and Maven respectively. `git check-ignore`, `javac`, `go build` and
+  `mvn validate` are cheap.
+- **The warm paths have their own bugs.** `kebab serve` and the warm JDBC
+  process were where the credential mix-up, the double execution, the buffer
+  leak and the relative-path confusion lived, because nothing else runs long
+  enough to notice.
 
 ## Packaging
 
+- `setup.sh` installs it from a clone: the lazy spec, the `kebab` command on
+  PATH, then `kebab doctor`. Published under gulay.io. Verified from a fresh
+  clone into a throwaway config, and the clone's own suite passes.
 - Decide whether this ships as a plain LazyVim plugin (works for anyone) or
   also as an Omarchy integration. An *Omarchy plugin* is a Quickshell/bar
   artifact, which this is not — at most it would be an install script plus
   theme awareness.
-- `setup.sh` installs it from a clone: the lazy spec, the `kebab` command on
-  PATH, then `kebab doctor`. Published under gulay.io.
+
+  If that is the direction, the pieces that already exist are `setup.sh` (the
+  install script), `kebab doctor` (which reports what a machine is missing and
+  exits non-zero only on required things, so it suits a post-install check),
+  and `bin/kebab` (a real CLI entry point, which is what a desktop launcher or
+  a bar action would call). What does not exist is theme awareness: the layer
+  reads whatever colorscheme the config sets and has no hook into Omarchy's
+  theme switching, and `~/.config/nvim/theme.lua` is Omarchy-owned and
+  deliberately untouched — so that is the one piece of new integration work.

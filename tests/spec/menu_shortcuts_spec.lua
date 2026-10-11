@@ -172,3 +172,106 @@ H.describe("menu shortcuts for the layer's own commands", function()
     H.ok(is_mapped("<RightMouse>", "v"), "<RightMouse> should be mapped in visual mode")
   end)
 end)
+
+-- BUFFER_LOCAL above only asserts these are *not* global. That they are
+-- actually bound where they are supposed to be was listed in BACKLOG.md as
+-- worth closing with a real fixture -- so here it is: a tracked file for the
+-- gitsigns keys, and a Go file for the LSP ones.
+H.describe("the buffer-local shortcuts the menu advertises", function()
+  ---Every lhs the menu prints that is listed as buffer-local, by prefix.
+  local function advertised(prefix)
+    local out = {}
+    for lhs in pairs(BUFFER_LOCAL) do
+      if lhs:find(prefix, 1, true) == 1 then
+        out[#out + 1] = lhs
+      end
+    end
+    table.sort(out)
+    return out
+  end
+
+  -- An explicit bufnr, never 0: opening the fixture fires the explorer
+  -- autocmd, which adds a neo-tree window, so "the current buffer" is not
+  -- reliably the file whose mappings are being checked.
+  local function mapped_in_buffer(bufnr, lhs)
+    local resolved = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+      if m.lhs == lhs or m.lhs == resolved then
+        return true
+      end
+    end
+    return false
+  end
+
+  H.it("binds the gitsigns keys on a tracked file", function()
+    local keys = advertised("<leader>gh")
+    H.ok(#keys >= 6, "the menu should advertise several gitsigns keys, got " .. #keys)
+
+    local repo, g = H.git_repo("gitsigns-keys")
+    H.write(repo .. "/tracked.txt", "one\ntwo\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "add")
+
+    vim.cmd("edit " .. vim.fn.fnameescape(repo .. "/tracked.txt"))
+    local bufnr = vim.fn.bufnr(repo .. "/tracked.txt")
+    H.ok(bufnr ~= -1, "the fixture should be loaded")
+    -- vim.wait, not H.wait: a missing gitsigns is a skip, not a failure
+    local ok = vim.wait(20000, function()
+      return mapped_in_buffer(bufnr, keys[1])
+    end, 100)
+    if not ok then
+      H.skip("gitsigns did not attach to the fixture")
+    end
+
+    local missing = {}
+    for _, lhs in ipairs(keys) do
+      if not mapped_in_buffer(bufnr, lhs) then
+        missing[#missing + 1] = lhs
+      end
+    end
+    H.eq({}, missing, "advertised but never bound, even on a tracked file")
+    H.reset_editor()
+  end)
+
+  H.it("binds the LSP keys on a buffer with a server attached", function()
+    if vim.fn.executable("go") == 0 then
+      H.skip("go is needed for a buffer with a language server")
+    end
+    local keys = advertised("<leader>c")
+    vim.list_extend(keys, { "gd", "gI", "gr" })
+
+    local dir = H.tmpdir("lsp-keys")
+    local res = vim.system({ "go", "mod", "init", "example.com/keys" }, { cwd = dir, text = true }):wait(60000)
+    H.eq(0, res.code, tostring(res.stderr))
+    H.write(dir .. "/main.go", "package main\n\nfunc main() {}\n")
+
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/main.go"))
+    local bufnr = vim.fn.bufnr(dir .. "/main.go")
+    H.ok(bufnr ~= -1, "the fixture should be loaded")
+    local attached = vim.wait(120000, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr }) > 0
+    end, 200)
+    if not attached then
+      H.skip("no language server attached to the fixture")
+    end
+    -- LazyVim binds these on LspAttach, which has now happened
+    local missing = {}
+    local bound = vim.wait(20000, function()
+      for _, lhs in ipairs(keys) do
+        if not mapped_in_buffer(bufnr, lhs) then
+          return false
+        end
+      end
+      return true
+    end, 200)
+    if not bound then
+      for _, lhs in ipairs(keys) do
+        if not mapped_in_buffer(bufnr, lhs) then
+          missing[#missing + 1] = lhs
+        end
+      end
+    end
+    H.eq({}, missing, "advertised but never bound, even with a server attached")
+    H.reset_editor()
+  end)
+end)
