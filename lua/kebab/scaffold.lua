@@ -28,8 +28,21 @@ function M.run_steps(steps, cwd, done)
       vim.notify(msg, vim.log.levels.ERROR)
       return done(false, msg)
     end
+    -- The other way vim.system throws: a cwd that does not exist. A step
+    -- whose directory an earlier step was supposed to create (`npm install`
+    -- after `npm create vite`) raised inside the scheduled callback, where the
+    -- error is swallowed -- so `done` was never called at all and
+    -- `kebab new --no-open` sat in its 15-minute wait over a half-built tree.
+    local where = step.cwd or cwd
+    if where and vim.fn.isdirectory(where) == 0 then
+      local msg = ("%s cannot run: %s does not exist"):format(step.label or step.cmd[1], where)
+      vim.notify(msg, vim.log.levels.ERROR)
+      return done(false, msg)
+    end
     vim.notify("… " .. (step.label or step.cmd[1]))
-    vim.system(step.cmd, { cwd = step.cwd or cwd, text = true }, function(res)
+    -- Belt and braces: anything else vim.system decides to throw must still
+    -- reach `done`, because that is the only way a caller learns the outcome.
+    local spawned, serr = pcall(vim.system, step.cmd, { cwd = where, text = true }, function(res)
       vim.schedule(function()
         if res.code ~= 0 then
           local msg = ("%s failed (%d)\n%s"):format(
@@ -40,6 +53,11 @@ function M.run_steps(steps, cwd, done)
         next_step()
       end)
     end)
+    if not spawned then
+      local msg = ("%s could not start: %s"):format(step.label or step.cmd[1], tostring(serr))
+      vim.notify(msg, vim.log.levels.ERROR)
+      return done(false, msg)
+    end
   end
   next_step()
 end
@@ -60,12 +78,13 @@ end
 ---The directory a scaffold should run *in*, for tools that create the project
 ---directory themselves (`flutter create`, `cargo new`, `npm create vite`).
 function M.parent_of(dest)
-  return vim.fn.fnamemodify(dest, ":h")
+  -- A trailing separator would make this one level too deep, and leaf_of empty.
+  return vim.fn.fnamemodify((tostring(dest):gsub("/+$", "")), ":h")
 end
 
 ---The last path component, which is what such tools are given as the name.
 function M.leaf_of(dest)
-  return vim.fn.fnamemodify(dest, ":t")
+  return vim.fn.fnamemodify((tostring(dest):gsub("/+$", "")), ":t")
 end
 
 ---A project name reduced to what a given ecosystem allows.

@@ -312,3 +312,49 @@ H.describe("the template picker", function()
     H.eq({}, vim.fn.readdir(dir), "nothing should have been written")
   end)
 end)
+
+-- path_for concatenated the user-supplied name onto the directory with no
+-- normalisation, so a name containing ../ wrote the file outside the project
+-- and reported success, with an un-normalised path and a nonsense package line.
+H.describe("a file name that tries to leave the directory", function()
+  local function go_template()
+    for _, t in ipairs(T.available({})) do
+      if t.name == "Go file" then
+        return t
+      end
+    end
+  end
+
+  H.it("is refused", function()
+    local base = H.tmpdir("traversal")
+    local dir = base .. "/proj/src/main/java/com/foo"
+    vim.fn.mkdir(dir, "p")
+    local ok, err = T.create(go_template(), dir, "../../../../../../outside/Pwned", { open = false })
+    H.falsy(ok, "it must not be written")
+    H.matches("outside", err, "and it should say why: " .. tostring(err))
+    H.falsy(H.exists(base .. "/outside/Pwned.go"), "nothing should have escaped")
+  end)
+
+  H.it("rejects an absolute name instead of pasting it on", function()
+    local dir = H.tmpdir("traversal-abs")
+    local ok, err = T.create(go_template(), dir, "/tmp/Absolute", { open = false })
+    H.falsy(ok)
+    H.matches("absolute", err)
+  end)
+
+  H.it("still allows a subdirectory, which is the legitimate case", function()
+    local dir = H.tmpdir("traversal-sub")
+    local ok, path = T.create(go_template(), dir, "sub/Nested", { open = false })
+    H.ok(ok, tostring(path))
+    H.eq(dir .. "/sub/Nested.go", path)
+    H.ok(H.exists(path))
+  end)
+
+  H.it("normalises the path it reports", function()
+    local dir = H.tmpdir("traversal-norm")
+    vim.fn.mkdir(dir .. "/a", "p")
+    local ok, path = T.create(go_template(), dir .. "/a", "./Plain", { open = false })
+    H.ok(ok, tostring(path))
+    H.falsy(path:find("/./", 1, true), "got: " .. path)
+  end)
+end)

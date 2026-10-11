@@ -799,3 +799,101 @@ H.describe("two requests on one connection", function()
     J.shutdown(url)
   end)
 end)
+
+-- A driver jar is fetched over the network and then put on a classpath that
+-- `java` executes, so it is worth knowing it is the jar Maven Central
+-- published. Central publishes a .sha1 beside every artifact, so this costs
+-- one extra GET.
+H.describe("trusting a downloaded driver jar", function()
+  H.it("rejects a version string that is really a path", function()
+    H.ok(J.is_version("42.6.0"))
+    H.ok(J.is_version("2.2.224"))
+    H.ok(J.is_version("1.0-rc1"))
+    H.ok(J.is_version("9.4.1212.jre7"), "a real postgres version")
+    -- <release>../../../etc/evil</release> became part of a filesystem path,
+    -- and mkdir -p would have created it
+    H.falsy(J.is_version("../../../etc/evil"))
+    H.falsy(J.is_version("a/b"))
+    H.falsy(J.is_version(""))
+    H.falsy(J.is_version("x; rm -rf /"))
+    H.falsy(J.is_version(nil))
+    H.falsy(J.is_version(string.rep("9", 70)), "implausibly long")
+  end)
+
+  H.it("refuses to cache a jar whose checksum does not match", function()
+    if vim.fn.executable("curl") == 0 then
+      H.skip("curl is needed to fetch the published checksum")
+    end
+    if vim.fn.executable("sha1sum") == 0 and vim.fn.executable("shasum") == 0 then
+      H.skip("no sha1sum available")
+    end
+    local dir = H.tmpdir("jar-verify")
+    local fake = dir .. "/tampered.jar"
+    H.write(fake, "not a jar at all")
+    local url = J.maven_url("org.xerial", "sqlite-jdbc", "3.46.0.0")
+    local ok, err = J.verify_jar(fake, url)
+    if ok then
+      H.skip("could not reach Maven Central to fetch the checksum")
+    end
+    H.falsy(ok)
+    H.matches("Checksum mismatch", err, "got: " .. tostring(err))
+  end)
+
+  H.it("accepts the jar Maven Central actually published", function()
+    if vim.fn.executable("curl") == 0 or vim.fn.executable("java") == 0 then
+      H.skip("curl and a JDK are needed")
+    end
+    local saved = vim.g.kebab_jdbc_dir
+    local strict = vim.g.kebab_jdbc_require_checksum
+    vim.g.kebab_jdbc_dir = H.tmpdir("jar-fetch")
+    vim.g.kebab_jdbc_require_checksum = true
+    local path, err = J.fetch_jar("org.xerial:sqlite-jdbc:3.46.0.0")
+    vim.g.kebab_jdbc_dir = saved
+    vim.g.kebab_jdbc_require_checksum = strict
+    if not path then
+      H.skip("could not reach Maven Central: " .. tostring(err))
+    end
+    H.ok(H.exists(path), "the jar should be cached at " .. path)
+    H.falsy(H.exists(path .. ".part"), "and no partial file left behind")
+  end)
+end)
+
+-- Warm processes are keyed by URL, but credentials are baked into the process
+-- environment once, at spawn. Two saved connections can share a URL and differ
+-- only in user, so a "readonly" connection reused a daemon started as "admin"
+-- and executed as admin, silently -- while the one-shot path, which passes the
+-- environment per run, behaved correctly.
+H.describe("a warm process and the credentials it was started with", function()
+  H.it("is not reused for a different user on the same URL", function()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+    local db = H.tmpdir("jdbc-creds") .. "/c.sqlite"
+    local res = vim.system({ "sqlite3", db }, { stdin = "create table t (v text);", text = true }):wait(30000)
+    H.eq(0, res.code, tostring(res.stderr))
+    local url = "jdbc:sqlite:" .. db
+
+    local saved = vim.g.kebab_db_credentials
+    local function run_as(user)
+      vim.g.kebab_db_credentials = { [url] = { user = user, password = user } }
+      local lines, err = J.run(url, "query", { stdin = "select 1", timeout = 120000 })
+      H.ok(lines, tostring(err))
+      return J.daemon_pid(url)
+    end
+
+    local ok, err = pcall(function()
+      local first = run_as("readonly")
+      H.ok(first, "a warm process should be running")
+      H.eq(first, run_as("readonly"), "the same credentials must reuse it")
+      local other = run_as("admin")
+      H.ok(other ~= first, "a different user must get its own process, not admin rights by accident")
+      H.ok(run_as("readonly") ~= other, "and back again")
+    end)
+    vim.g.kebab_db_credentials = saved
+    J.shutdown(url)
+    H.ok(ok, tostring(err))
+  end)
+end)

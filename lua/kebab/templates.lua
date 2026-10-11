@@ -110,6 +110,19 @@ end
 ---@param template table
 ---@param dir string
 ---@param name string what the user typed
+---Is `path` inside `dir` once `..` has been resolved?
+---@param dir string
+---@param path string
+local function contained(dir, path)
+  local base = vim.fs.normalize(dir):gsub("/+$", "")
+  local full = vim.fs.normalize(path)
+  return full == base or full:sub(1, #base + 1) == base .. "/"
+end
+
+---@param template table
+---@param dir string
+---@param name string
+---@return string|nil path, string|nil err
 function M.path_for(template, dir, name)
   -- Some templates decide their own path from the answer: a SvelteKit route
   -- directory becomes `<answer>/+page.svelte`, not `<answer>.svelte`.
@@ -122,7 +135,18 @@ function M.path_for(template, dir, name)
   if ext and ext ~= "" and not name:match("%." .. vim.pesc(ext) .. "$") then
     name = name .. "." .. ext
   end
-  return (dir:gsub("/+$", "")) .. "/" .. name
+  -- An absolute name would otherwise be pasted on: "/d" .. "/" .. "/tmp/x".
+  if name:match("^/") then
+    return nil, "a file name cannot be an absolute path: " .. name
+  end
+  local path = (dir:gsub("/+$", "")) .. "/" .. name
+  -- `../../../../outside/Pwned` wrote the file outside the project and
+  -- reported success, with an un-normalised path and a nonsense package line.
+  -- A subdirectory is fine; leaving the directory is not.
+  if not contained(dir, path) then
+    return nil, ("%q would write outside %s"):format(name, dir)
+  end
+  return vim.fs.normalize(path)
 end
 
 ---Render a template's contents.
@@ -143,7 +167,10 @@ end
 ---@param answers? table
 function M.context(template, dir, name, answers)
   dir = M.target_dir(template, dir)
-  local path = M.path_for(template, dir, name)
+  local path, perr = M.path_for(template, dir, name)
+  if not path then
+    return nil, perr
+  end
   local basename = vim.fn.fnamemodify(path, ":t")
   local stem = basename:gsub("%.[^.]+$", "")
   local _, marker = registry.find_project(dir)
@@ -176,7 +203,10 @@ function M.create(template, dir, name, opts)
     name = ""
   end
 
-  local ctx = M.context(template, dir, vim.trim(name or ""), opts.answers)
+  local ctx, cerr = M.context(template, dir, vim.trim(name or ""), opts.answers)
+  if not ctx then
+    return false, cerr
+  end
   if vim.uv.fs_stat(ctx.path) then
     return false, ctx.path .. " already exists"
   end

@@ -212,7 +212,23 @@ function M.latest_version(group, artifact)
   if not version then
     return nil, ("No released version found for %s:%s"):format(group, artifact)
   end
+  -- This string becomes part of a filesystem path and a URL, so it has to look
+  -- like a version. A `<release>../../../etc</release>` from anything that can
+  -- answer for the repository would otherwise write the downloaded body
+  -- outside the cache directory, which `mkdir -p` would happily create.
+  if not M.is_version(version) then
+    return nil, ("Maven Central returned an implausible version for %s:%s: %q"):format(group, artifact, version)
+  end
   return version
+end
+
+---Does this look like a version, rather than a path or an injection?
+---@param version any
+function M.is_version(version)
+  if type(version) ~= "string" or version == "" or #version > 64 then
+    return false
+  end
+  return version:match("^[%w][%w%.%-%+_]*$") ~= nil
 end
 
 ---Cached version for a coordinate, so a resolved version is reused rather than
@@ -321,11 +337,17 @@ function M.fetch_jar(coord)
   if vim.uv.fs_stat(path) then
     return path
   end
+  if not M.is_version(spec.version) then
+    return nil, ("%s:%s has an implausible version: %q"):format(spec.group, spec.artifact, tostring(spec.version))
+  end
   vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
   local url = M.maven_url(spec.group, spec.artifact, spec.version)
   local tmp = path .. ".part"
   local res = vim.system(
-    { "curl", "-sfL", "--max-time", "300", "-o", tmp, url },
+    -- --proto/--proto-redir: without them an https -> http redirect is
+    -- followed in the clear, and this jar goes straight onto a classpath that
+    -- `java` then executes.
+    { "curl", "-sfL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "300", "-o", tmp, url },
     { text = true }
   ):wait(310000)
   if res.code ~= 0 then
@@ -338,8 +360,79 @@ function M.fetch_jar(coord)
     pcall(vim.fn.delete, tmp)
     return nil, ("Downloaded nothing from %s"):format(url)
   end
+  -- Maven Central publishes a .sha1 beside every artifact, so verifying costs
+  -- one extra GET -- worth it for a file that is about to be executed.
+  local verified, why = M.verify_jar(tmp, url)
+  if not verified then
+    pcall(vim.fn.delete, tmp)
+    return nil, why
+  end
   os.rename(tmp, path)
   return path
+end
+
+---Check a downloaded jar against the `.sha1` Maven Central publishes for it.
+---
+---Returns true when it matches, and also when the checksum cannot be fetched
+---or no sha1sum is available -- refusing to work offline would be worse than
+---the risk, and `vim.g.kebab_jdbc_require_checksum` makes it strict.
+---@param file string
+---@param url string the jar's URL
+---@return boolean ok, string|nil err
+function M.verify_jar(file, url)
+  local strict = vim.g.kebab_jdbc_require_checksum == true
+  local tool, flag
+  for _, candidate in ipairs({ { "sha1sum", nil }, { "shasum", "-a1" } }) do
+    if vim.fn.executable(candidate[1]) == 1 then
+      tool, flag = candidate[1], candidate[2]
+      break
+    end
+  end
+  if not tool then
+    if strict then
+      return false, "no sha1sum available to verify " .. url
+    end
+    return true
+  end
+
+  local res = vim.system({
+    "curl",
+    "-sfL",
+    "--proto",
+    "=https",
+    "--proto-redir",
+    "=https",
+    "--max-time",
+    "30",
+    url .. ".sha1",
+  }, { text = true }):wait(40000)
+  if res.code ~= 0 then
+    if strict then
+      return false, "could not fetch the checksum for " .. url
+    end
+    return true
+  end
+  local want = (res.stdout or ""):match("%x%x%x%x%x%x%x%x+")
+  if not want then
+    if strict then
+      return false, "no usable checksum published for " .. url
+    end
+    return true
+  end
+
+  local argv = flag and { tool, flag, file } or { tool, file }
+  local sum = vim.system(argv, { text = true }):wait(60000)
+  local got = (sum.stdout or ""):match("^(%x+)")
+  if sum.code ~= 0 or not got then
+    if strict then
+      return false, "could not compute a checksum for " .. file
+    end
+    return true
+  end
+  if got:lower() ~= want:lower() then
+    return false, ("Checksum mismatch for %s (expected %s, got %s)"):format(url, want, got)
+  end
+  return true
 end
 
 ---Is every jar for `driver` already cached?
@@ -579,6 +672,16 @@ function M.daemon_count()
   return vim.tbl_count(daemons)
 end
 
+---The pid of the warm process for `url`, or nil.
+---
+---Exposed so a test can tell "reused" from "restarted": the count alone cannot,
+---because a restart shuts one down and starts one.
+---@param url string
+function M.daemon_pid(url)
+  local d = daemons[url]
+  return d and d.pid or nil
+end
+
 ---Hand a complete response to the oldest waiting caller.
 local function deliver(d, ok, body)
   local waiter = table.remove(d.queue, 1)
@@ -661,6 +764,25 @@ function M.shutdown_all()
   end
 end
 
+---A fingerprint of the credentials a warm process was started with.
+---
+---Warm processes are keyed by URL, but credentials are baked into the process
+---environment once, at spawn. Two saved connections can share a URL and differ
+---only in user -- the URL templates carry host, port and database, nothing
+---else -- so a "readonly" connection reused a daemon started as "admin" and
+---executed as admin, silently. The one-shot path passes the environment per
+---run and never had this bug, so the behaviour depended on whether the daemon
+---happened to be warm.
+---
+---Hashed, so no secret is held as a table key or printed in a message.
+---@param url string
+local function credentials_fingerprint(url)
+  local creds = M.credentials_env(url) or {}
+  local material = ("%s\0%s"):format(creds.KEBAB_DB_USER or "", creds.KEBAB_DB_PASSWORD or "")
+  local ok, digest = pcall(vim.fn.sha256, material)
+  return ok and digest or material
+end
+
 ---Start a warm process for `url`, or return nil plus a reason.
 local function start_daemon(url)
   local argv, err = M.command(url, "serve")
@@ -722,6 +844,7 @@ local function start_daemon(url)
   end
 
   d.handle, d.pid, d.stdin, d.stdout, d.stderr = handle, pid, stdin, stdout, stderr
+  d.creds = credentials_fingerprint(url)
 
   stdout:read_start(function(rerr, chunk)
     if rerr or not chunk then
@@ -751,6 +874,12 @@ end
 ---@return boolean|nil ok, string body_or_err, boolean retryable
 local function request(url, mode, arg, payload, timeout)
   local d = daemons[url]
+  -- Credentials are per connection, not per URL: a warm process started under
+  -- one user must not answer for another.
+  if d and d.creds ~= credentials_fingerprint(url) then
+    M.shutdown(url)
+    d = nil
+  end
   if not d then
     local err
     d, err = start_daemon(url)

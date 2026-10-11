@@ -684,3 +684,57 @@ H.describe("poms that used to be corrupted by an insert", function()
     end
   end)
 end)
+
+-- run_steps guarded only one of the two ways vim.system throws: a step whose
+-- cwd does not exist raised inside a scheduled callback, where the error is
+-- swallowed, so `done` was never called and `kebab new --no-open` sat in its
+-- fifteen-minute wait over a half-built tree.
+H.describe("a scaffold step that cannot run", function()
+  local S = require("kebab.scaffold")
+
+  local function run(steps, cwd)
+    local answered, ok, err = false, nil, nil
+    S.run_steps(steps, cwd, function(o, e)
+      answered, ok, err = true, o, e
+    end)
+    H.wait(30000, function()
+      return answered
+    end, "run_steps must always call done")
+    return ok, err
+  end
+
+  H.it("reports a missing cwd instead of never answering", function()
+    local base = H.tmpdir("steps-cwd")
+    local ok, err = run({
+      { label = "step one", cmd = { "true" } },
+      { label = "step two", cmd = { "true" }, cwd = base .. "/made-by-step-one" },
+    }, base)
+    H.falsy(ok)
+    H.matches("does not exist", err, "got: " .. tostring(err))
+    H.matches("step two", err, "and name the step: " .. tostring(err))
+  end)
+
+  H.it("still reports a missing executable", function()
+    local ok, err = run({ { label = "nope", cmd = { "definitely-not-installed-xyz" } } }, H.tmpdir("steps-exe"))
+    H.falsy(ok)
+    H.matches("not installed", err)
+  end)
+
+  H.it("runs every step when they all work", function()
+    local base = H.tmpdir("steps-ok")
+    local ok, err = run({
+      { label = "one", cmd = { "mkdir", "made" } },
+      { label = "two", cmd = { "touch", "made/file" } },
+    }, base)
+    H.ok(ok, tostring(err))
+    H.ok(H.exists(base .. "/made/file"))
+  end)
+
+  H.it("does not let a trailing slash empty the project name", function()
+    H.eq("/a", S.parent_of("/a/b/"))
+    H.eq("b", S.leaf_of("/a/b/"))
+    H.eq("/a", S.parent_of("/a/b"))
+    H.eq("b", S.leaf_of("/a/b"))
+    H.eq("b", S.leaf_of("/a/b//"))
+  end)
+end)

@@ -267,6 +267,31 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- A **warm process is keyed by URL, but credentials are baked in at spawn**.
+  Two saved connections can share a URL and differ only in user -- the URL
+  templates carry host, port and database only -- so a "readonly" connection
+  reused a daemon started as "admin" and ran as admin, silently, while the
+  one-shot path behaved correctly. `request` compares a hash of the current
+  credentials against the daemon's and restarts it on a mismatch;
+  `jdbc.daemon_pid` exists so a test can tell reuse from restart.
+- A **driver jar goes onto a classpath that `java` executes**, so it is checked
+  against the `.sha1` Maven Central publishes beside it -- one extra GET.
+  `vim.g.kebab_jdbc_require_checksum` makes it strict; by default a missing
+  checksum or sha1sum does not block working offline. curl also passes
+  `--proto =https --proto-redir =https`, or an https -> http redirect is
+  followed in the clear.
+- The version string from `maven-metadata.xml` **becomes part of a filesystem
+  path**, so `<release>../../../x</release>` was a write-outside-the-cache
+  primitive. `jdbc.is_version` gates it.
+- `templates.path_for` must **contain** the result: a name like
+  `../../../../outside/Pwned` wrote the file outside the project and reported
+  success, with an un-normalised path and a nonsense package line. A
+  subdirectory is still allowed; an absolute name is refused.
+- `vim.system` throws for a **missing `cwd`** as well as a missing executable,
+  and from step two onward `run_steps` was inside a `vim.schedule` where the
+  throw is swallowed -- so `done` was never called and `kebab new --no-open`
+  waited fifteen minutes over a half-built tree. Both are checked, and the
+  spawn is wrapped.
 - **`vim.wait` pumps `vim.schedule` callbacks**, so a second `jdbc.run` on the
   same URL used to start *inside* the first one's wait. The per-URL process is
   a single slot and whichever request timed out first called `shutdown(url)`,
