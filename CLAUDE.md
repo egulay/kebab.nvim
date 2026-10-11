@@ -53,6 +53,7 @@ lua/kebab/
 ├── gradle.lua           build.gradle[.kts] editing, both dialects
 ├── follow.lua           :IdeFollow -- follow edits made outside the editor
 ├── ghostbar.lua         the animated Ghost Mode panel follow.lua turns on
+├── gitwatch.lua         notice commits/pushes made outside the editor
 ├── codegen.lua          :IdeGenerate (jdtls source actions, named)
 ├── templates.lua        :IdeNewFile (package line from the directory)
 ├── scratch.lua          :IdeScratch (real files under stdpath("data"))
@@ -413,6 +414,17 @@ client attached, file contents reverted.
   every configured symbol is ASCII or in a Nerd Font private-use range, and
   asks `fc-list` whether the installed font really has it.
 - `utf8.codes` does not exist in LuaJIT. `vim.fn.str2list(s)` gives codepoints.
+- **Nothing sees a commit or a push without `gitwatch.lua`.** `follow.lua`
+  excludes `.git` from its watch on purpose, and a *push* changes no file at
+  all -- only `.git/refs/remotes/...` -- so no working-tree watcher could ever
+  notice it. `gitwatch` watches `.git` itself and only re-reads state: gitsigns
+  `refresh()`, neo-tree's `GIT_EVENT` **and** a filesystem-source refresh
+  (the event alone leaves a partial update), and `redrawstatus!`. It never
+  moves the cursor. `:IdeGitRefresh` does it by hand;
+  `vim.g.kebab_git_watch = false` turns it off. Measured: one coalesced refresh
+  from an external commit, and one from an external push.
+- A worktree's or submodule's `.git` is a **file** holding `gitdir: <path>`,
+  which may be relative. `gitwatch.git_dir` resolves both.
 - **The badge is an activity light, not a status light.** It appears from
   `ghostbar.activity()` -- i.e. because something touched the project -- and
   hides itself after `idle_ms` (5s) of quiet. `follow.start()` must NOT show

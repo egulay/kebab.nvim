@@ -433,6 +433,20 @@ vim.g.kebab_follow_spinner = { "󰊠  ", " 󰊠 ", "  󰊠", " 󰊠 " }
 
 `follow.status()` returns the same thing as a plain string, for a statusline.
 
+## When git changes outside the editor
+
+A commit, checkout, stash or push made in another terminal is picked up
+automatically: the tree's git markers and colours, the gutter signs and the
+statusline all re-read their state within a moment. A **push** is the one that
+nothing else could notice, because it changes no file — only
+`.git/refs/remotes/…`.
+
+| | |
+|---|---|
+| `:IdeGitRefresh` | re-read it now, by hand |
+| `vim.g.kebab_git_watch = false` | stop watching `.git` |
+| `vim.g.kebab_git_watch_debounce = 300` | coalescing window, ms |
+
 ## Running a shell command without leaving the editor
 
 `:` opens Vim's own command line, so it takes Ex commands — but `!` escapes to

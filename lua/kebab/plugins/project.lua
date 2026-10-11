@@ -35,6 +35,7 @@ return {
       require("kebab.projectfiles").setup()
       require("kebab.runconfig").setup()
       require("kebab.follow").setup()
+      require("kebab.gitwatch").setup()
       require("kebab.cli").setup()
     end,
     keys = {
