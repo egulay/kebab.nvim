@@ -398,6 +398,21 @@ client attached, file contents reverted.
   VimLeavePre/VimLeave/QuitPre *before* the stop, and by `vim.v.exiting`. It
   also skips a `gitcommit`/`gitrebase`/`help`/`man` buffer, which is not a
   session worth following.
+- **A held change must not be discarded.** `flush` used to throw its pending
+  set away whenever `yielding()` said the user was busy, so an agent's whole
+  burst went unseen while you had unsaved changes -- and the next change after
+  you went idle looked like the only thing that happened. Measured: 7 files
+  written, 0 shown. It holds them now (stale after `hold_ms`, 30s), retries
+  every `retry_ms` until you are free, and the **badge reports each file
+  immediately** whether or not the view is about to move.
+- **Two of neo-tree's nine default git markers are plain Unicode dingbats** --
+  `added = "✚"` (U+271A) and `deleted = "✖"` (U+2716) -- and a Nerd Font does
+  not carry those. the monospace Nerd Font has every other symbol it uses and
+  neither of these, so a file an agent had just *added* rendered as a tofu box.
+  `plugins/ui.lua` overrides both with nf-fa glyphs. `menu_tree_spec` asserts
+  every configured symbol is ASCII or in a Nerd Font private-use range, and
+  asks `fc-list` whether the installed font really has it.
+- `utf8.codes` does not exist in LuaJIT. `vim.fn.str2list(s)` gives codepoints.
 - **The badge is an activity light, not a status light.** It appears from
   `ghostbar.activity()` -- i.e. because something touched the project -- and
   hides itself after `idle_ms` (5s) of quiet. `follow.start()` must NOT show

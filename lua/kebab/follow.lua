@@ -17,6 +17,9 @@ local STATE = {
   running = false,
   stop_fns = {},     -- one per watched root
   roots = {},
+  seq_at = {},       -- path -> when it arrived, so a held change can go stale
+  retry = nil,       -- re-check timer while the user is busy
+  held_reason = nil, -- why the view is not moving right now
   root = nil,        -- the first one, for the statusline
   pending = {},      -- path -> change type, coalesced
   timer = nil,
@@ -51,6 +54,12 @@ function M.config()
     -- "latest" follows the most recent change; "first" stays on the first file
     -- of a burst, which is calmer when a refactor touches many files.
     follow = "latest",
+    -- How long a change is held while you are busy (typing, unsaved changes,
+    -- a picker open) before it is treated as stale. Held rather than dropped:
+    -- dropping is why an agent's whole burst could go unseen.
+    hold_ms = 30000,
+    -- how often to re-check whether you are free again
+    retry_ms = 400,
     -- Open a file that is not already in a buffer.
     --
     -- On, because an agent creating files is the normal case and not following
@@ -283,9 +292,9 @@ end
 
 ---Flush the coalesced events.
 local function flush()
-  -- A watcher event can still arrive after stop(): STATE.stop_fn sends an
-  -- asynchronous SIGINT, and whatever inotifywait had already written is still
-  -- delivered. Without this the view moved after the user turned following off.
+  -- A watcher event can still arrive after stop(): the stop is an asynchronous
+  -- SIGINT, and whatever inotifywait had already written is still delivered.
+  -- Without this the view moved after the user turned following off.
   if not STATE.running then
     STATE.pending = {}
     return
@@ -296,12 +305,11 @@ local function flush()
   -- "latest" mean "alphabetically last" -- the two modes were effectively
   -- swapped, and a path sorting after the one being edited masked it for the
   -- whole session.
+  local seq = STATE.pending
   local paths = {}
-  for path in pairs(STATE.pending) do
+  for path in pairs(seq) do
     paths[#paths + 1] = path
   end
-  local seq = STATE.pending
-  STATE.pending = {}
   if #paths == 0 then
     return
   end
@@ -312,22 +320,85 @@ local function flush()
     return a < b
   end)
 
+  -- The badge reports activity straight away, whether or not the view is about
+  -- to move. The agent *is* working, and saying so is the indicator's whole
+  -- job -- it used to only appear if the jump happened, so a user mid-edit saw
+  -- nothing at all while a burst of edits went by.
+  local newest = paths[#paths]
+  pcall(function()
+    require("kebab.ghostbar").activity(newest)
+  end)
+
   local reason = M.yielding()
   if reason then
-    -- Dropped rather than queued: by the time you leave insert mode the jump
-    -- would be about something you have stopped caring about.
+    -- HELD, not discarded. Discarding is why an agent's whole burst could
+    -- vanish: with unsaved changes in the current buffer every flush threw its
+    -- pending set away, so nothing was ever shown -- and then the next change
+    -- after you went idle looked like the only thing that happened.
+    --
+    -- Anything older than hold_ms is genuinely stale and dropped, so this
+    -- cannot grow without bound or jump to something from minutes ago.
+    local cutoff = vim.uv.now() - (cfg.hold_ms or 30000)
+    local kept, n = {}, 0
+    for path, when in pairs(seq) do
+      if (STATE.seq_at[path] or 0) >= cutoff then
+        kept[path] = when
+        n = n + 1
+      end
+    end
+    STATE.pending = kept
+    STATE.held_reason = reason
+    if n > 0 then
+      -- Retry until the user is free. Not the debounce timer: that one is
+      -- armed by new events, and a held burst may get none.
+      M.arm_retry(cfg)
+    end
     return
   end
 
+  STATE.pending = {}
+  STATE.held_reason = nil
   local chosen = cfg.follow == "first" and paths[1] or paths[#paths]
-  local ok, line = pcall(M.follow_file, chosen, { cfg = cfg })
-  -- Name the file on the indicator, so the panel says what just moved rather
-  -- than only that something did.
-  if ok and line then
-    pcall(function()
-      require("kebab.ghostbar").activity(chosen)
-    end)
+  pcall(M.follow_file, chosen, { cfg = cfg })
+end
+
+---Re-check later whether the user is still busy, so a held burst is not lost.
+---@param cfg table
+function M.arm_retry(cfg)
+  if STATE.retry then
+    return false
   end
+  STATE.retry = vim.uv.new_timer()
+  STATE.retry:start(
+    cfg.retry_ms or 400,
+    cfg.retry_ms or 400,
+    vim.schedule_wrap(function()
+      if not STATE.running or next(STATE.pending) == nil then
+        return M.cancel_retry()
+      end
+      if M.yielding() then
+        return
+      end
+      M.cancel_retry()
+      flush()
+    end)
+  )
+  return true
+end
+
+---Stop the retry timer, if one is armed.
+function M.cancel_retry()
+  if not STATE.retry then
+    return false
+  end
+  pcall(function()
+    STATE.retry:stop()
+    if not STATE.retry:is_closing() then
+      STATE.retry:close()
+    end
+  end)
+  STATE.retry = nil
+  return true
 end
 
 ---Record a change, to be acted on after the debounce window.
@@ -345,6 +416,7 @@ function M.on_change(path)
   end
   STATE.seq = (STATE.seq or 0) + 1
   STATE.pending[path] = STATE.seq
+  STATE.seq_at[path] = vim.uv.now()
   M.cancel_timer()
   STATE.timer = vim.uv.new_timer()
   STATE.timer:start(cfg.debounce_ms, 0, function()
@@ -486,6 +558,7 @@ function M.stop()
     -- Still tidy up: a timer armed by an event that arrived during the last
     -- stop would otherwise stay open for the session.
     M.cancel_timer()
+    M.cancel_retry()
     STATE.pending = {}
     return false, "not following"
   end
@@ -497,10 +570,13 @@ function M.stop()
     pcall(stop)
   end
   M.cancel_timer()
+  M.cancel_retry()
   STATE.running = false
   STATE.stop_fns = {}
   STATE.roots = {}
   STATE.pending = {}
+  STATE.seq_at = {}
+  STATE.held_reason = nil
   pcall(function()
     require("kebab.ghostbar").hide()
   end)
@@ -530,6 +606,7 @@ function M.state()
     last = STATE.last,
     count = STATE.count,
     pending = vim.tbl_count(STATE.pending),
+    held_reason = STATE.held_reason,
   }
 end
 

@@ -275,3 +275,115 @@ H.describe("tree filesystem behaviour", function()
     H.eq(true, vim.tbl_get(opts, "filesystem", "use_libuv_file_watcher"))
   end)
 end)
+
+-- Two of neo-tree's nine default git markers are plain Unicode dingbats --
+-- `added = "✚"` (U+271A) and `deleted = "✖"` (U+2716) -- and a Nerd Font does
+-- not carry those. the monospace Nerd Font has every other symbol it uses and
+-- neither of these, so a file an agent had just *added* rendered as a tofu box.
+H.describe("the tree's glyphs", function()
+  -- str2list, not utf8.codes: this is LuaJIT, which has no utf8 library.
+  local function codepoints(str)
+    return vim.fn.str2list(str)
+  end
+
+  ---Is this codepoint one a Nerd Font is expected to carry?
+  ---
+  ---ASCII, or the private-use areas Nerd Fonts patch into. A dingbat like
+  ---U+271A is in neither, which is the whole bug.
+  local function nerd_safe(cp)
+    return cp < 0x2000
+      or (cp >= 0xE000 and cp <= 0xF8FF)
+      or (cp >= 0xF0000 and cp <= 0xFFFFD)
+      or (cp >= 0x100000 and cp <= 0x10FFFD)
+  end
+
+  ---What this layer configures, merged over what neo-tree defaults to.
+  ---
+  ---Read from the live config when neo-tree has been set up in this session,
+  ---and from the spec file plus neo-tree's own defaults otherwise -- so this
+  ---asserts the same thing either way instead of skipping, which is what it
+  ---did on roughly one run in two.
+  local function git_symbols()
+    pcall(function()
+      require("lazy").load({ plugins = { "neo-tree.nvim" } })
+    end)
+    local live = vim.tbl_get(require("neo-tree").config or {}, "default_component_configs", "git_status", "symbols")
+    if type(live) == "table" and not vim.tbl_isempty(live) then
+      return live
+    end
+    local defaults = {}
+    local ok, d = pcall(dofile, vim.fn.expand("~/.local/share/nvim/lazy/neo-tree.nvim/lua/neo-tree/defaults.lua"))
+    if ok then
+      defaults = vim.tbl_get(d or {}, "default_component_configs", "git_status", "symbols") or {}
+    end
+    local ours = {}
+    for _, entry in ipairs(dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/ui.lua")) do
+      if entry[1] == "nvim-neo-tree/neo-tree.nvim" then
+        ours = vim.tbl_get(entry, "opts", "default_component_configs", "git_status", "symbols") or {}
+      end
+    end
+    return vim.tbl_extend("force", defaults, ours)
+  end
+
+  H.it("uses no symbol outside a Nerd Font's ranges", function()
+    local symbols = git_symbols()
+    H.ok(not vim.tbl_isempty(symbols), "the symbols should be resolvable either way")
+    local offenders = {}
+    for name, glyph in pairs(symbols) do
+      if type(glyph) == "string" and name ~= "align" then
+        for _, cp in ipairs(codepoints(glyph)) do
+          if not nerd_safe(cp) then
+            offenders[#offenders + 1] = ("%s = %s (U+%X)"):format(name, glyph, cp)
+          end
+        end
+      end
+    end
+    H.eq({}, offenders, "a dingbat renders as a box in a Nerd Font terminal")
+  end)
+
+  H.it("overrides exactly the two markers neo-tree gets wrong", function()
+    local spec = dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/ui.lua")
+    local symbols
+    for _, entry in ipairs(spec) do
+      if entry[1] == "nvim-neo-tree/neo-tree.nvim" then
+        symbols = vim.tbl_get(entry, "opts", "default_component_configs", "git_status", "symbols")
+      end
+    end
+    H.ok(symbols, "the layer should set git_status symbols")
+    H.ok(symbols.added, "added is the one an agent creating files hits")
+    H.ok(symbols.deleted, "deleted has the same problem")
+    for name, glyph in pairs(symbols) do
+      for _, cp in ipairs(codepoints(glyph)) do
+        H.ok(nerd_safe(cp), ("%s = U+%X is outside a Nerd Font's ranges"):format(name, cp))
+      end
+    end
+  end)
+
+  -- The real check, when the tooling is there: ask the installed font.
+  H.it("uses glyphs this machine's font actually has", function()
+    if vim.fn.executable("fc-list") == 0 then
+      H.skip("fc-list is needed to inspect the font")
+    end
+    local font = "the monospace Nerd Font"
+    local probe = vim.system({ "fc-list", ":charset=F067", "family" }, { text = true }):wait(30000)
+    if not (probe.stdout or ""):find(font, 1, true) then
+      H.skip(font .. " is not installed on this machine")
+    end
+    local symbols = git_symbols()
+    H.ok(not vim.tbl_isempty(symbols), "the symbols should be resolvable either way")
+    local missing = {}
+    for name, glyph in pairs(symbols) do
+      if type(glyph) == "string" and name ~= "align" then
+        for _, cp in ipairs(codepoints(glyph)) do
+          if cp > 0x2000 then
+            local res = vim.system({ "fc-list", (":charset=%X"):format(cp), "family" }, { text = true }):wait(30000)
+            if not (res.stdout or ""):find(font, 1, true) then
+              missing[#missing + 1] = ("%s = U+%X"):format(name, cp)
+            end
+          end
+        end
+      end
+    end
+    H.eq({}, missing, "these render as a box in the terminal")
+  end)
+end)

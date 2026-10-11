@@ -10,6 +10,21 @@ return {
       require("kebab.explorer").setup()
     end,
     opts = {
+      default_component_configs = {
+        git_status = {
+          -- Two of neo-tree's nine default markers are plain Unicode dingbats
+          -- -- `added = "✚"` (U+271A) and `deleted = "✖"` (U+2716) -- and a
+          -- Nerd Font does not carry those: the monospace Nerd Font has every
+          -- other symbol it uses and neither of these. So a file an agent had
+          -- just *added* rendered as a tofu box, which is exactly when you are
+          -- looking at the tree. These two are Nerd Font glyphs instead,
+          -- checked present with `fc-list :charset=F067`.
+          symbols = {
+            added = "", -- nf-fa-plus, U+F067
+            deleted = "", -- nf-fa-minus, U+F068
+          },
+        },
+      },
       window = {
         width = 32,
         mappings = {
