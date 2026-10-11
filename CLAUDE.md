@@ -267,6 +267,27 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- A Gradle build file cannot be blanked with a **pattern**: the first `//` on
+  `maven { url = uri("https://repo.spring.io/milestone") }` is inside a string,
+  and blanking from there erased that line's closing brace -- so the brace
+  counter never saw depth 0 and `:IdeAddDependency` refused an ordinary file.
+  `gradle.blank(text, { strings = })` scans instead; brace counting blanks
+  strings too (`ext.closeBrace = "}"` sent the dependency into
+  `subprojects { }`), and `has_dependency` keeps them because the coordinates
+  live there.
+- **`vim.tbl_deep_extend` replaces a list, it does not merge it.** Setting
+  `vim.g.kebab_follow.ignored_dirs` un-ignored node_modules, build and .venv,
+  and setting `ignored_suffixes` un-ignored `.swp` -- so the follower chased
+  Vim's own swap writes. `follow.config` merges the lists and takes
+  `replace_ignores = true` for the opt-out.
+- A debounce set keyed by path **loses arrival order**: `follow`'s "latest" and
+  "first" were both `table.sort` plus an end, i.e. alphabetical -- effectively
+  swapping the two modes. `STATE.pending[path]` holds a sequence number now.
+- A watcher event can arrive **after `stop()`**: the stop is an asynchronous
+  SIGINT and inotifywait's buffered lines still come through. `on_change` and
+  `flush` check `STATE.running`, and `stop()` closes the debounce timer even
+  when it thinks it is already stopped -- it used to early-return and leak one
+  libuv timer per stop-mid-burst.
 - **overseer's `condition` understands `filetype`, `dir` and `tags` only.**
   `condition = { callback = fn }` is accepted and then silently ignored, so all
   32 marker-gated language tasks were offered in every project. Marker gating

@@ -56,10 +56,32 @@ function M.config()
     highlight_ms = 1200,
   }
   local user = vim.g.kebab_follow
-  if type(user) == "table" then
-    return vim.tbl_deep_extend("force", defaults, user)
+  if type(user) ~= "table" then
+    return defaults
   end
-  return defaults
+  local cfg = vim.tbl_deep_extend("force", defaults, user)
+  -- tbl_deep_extend REPLACES a list rather than merging it, so
+  -- `ignored_dirs = { "generated" }` un-ignored node_modules, build, .venv and
+  -- the rest -- and `ignored_suffixes = { ".bak" }` un-ignored .swp, so the
+  -- follower started chasing Vim's own swap writes. Adding to the list is what
+  -- anyone setting one of these means.
+  for field, builtin in pairs({ ignored_dirs = IGNORED_DIRS, ignored_suffixes = IGNORED_SUFFIXES }) do
+    if type(user[field]) == "table" then
+      local merged = vim.deepcopy(builtin)
+      for _, entry in ipairs(user[field]) do
+        if not vim.tbl_contains(merged, entry) then
+          merged[#merged + 1] = entry
+        end
+      end
+      cfg[field] = merged
+    end
+  end
+  -- ...and an explicit opt-out, because "ignore nothing" has to be sayable.
+  if user.replace_ignores == true then
+    cfg.ignored_dirs = user.ignored_dirs or {}
+    cfg.ignored_suffixes = user.ignored_suffixes or {}
+  end
+  return cfg
 end
 
 -- ----------------------------------------------------------------- filters
@@ -256,13 +278,34 @@ end
 
 ---Flush the coalesced events.
 local function flush()
+  -- A watcher event can still arrive after stop(): STATE.stop_fn sends an
+  -- asynchronous SIGINT, and whatever inotifywait had already written is still
+  -- delivered. Without this the view moved after the user turned following off.
+  if not STATE.running then
+    STATE.pending = {}
+    return
+  end
   local cfg = M.config()
-  local paths = vim.tbl_keys(STATE.pending)
+  -- Ordered by when each change arrived, not by name. STATE.pending used to be
+  -- a plain set, so insertion order was irrecoverable and `table.sort` made
+  -- "latest" mean "alphabetically last" -- the two modes were effectively
+  -- swapped, and a path sorting after the one being edited masked it for the
+  -- whole session.
+  local paths = {}
+  for path in pairs(STATE.pending) do
+    paths[#paths + 1] = path
+  end
+  local seq = STATE.pending
   STATE.pending = {}
   if #paths == 0 then
     return
   end
-  table.sort(paths)
+  table.sort(paths, function(a, b)
+    if seq[a] ~= seq[b] then
+      return seq[a] < seq[b]
+    end
+    return a < b
+  end)
 
   local reason = M.yielding()
   if reason then
@@ -285,20 +328,42 @@ end
 ---Record a change, to be acted on after the debounce window.
 ---@param path string
 function M.on_change(path)
+  -- Events in flight when stop() ran must not arm a new timer: stop() early
+  -- returns on `not STATE.running`, so it could never close it again and every
+  -- stop-mid-burst leaked one open libuv timer for the rest of the session.
+  if not STATE.running then
+    return false
+  end
   local cfg = M.config()
   if M.ignored(path, cfg) then
     return false
   end
-  STATE.pending[path] = true
-  if STATE.timer then
-    STATE.timer:stop()
-    STATE.timer:close()
-    STATE.timer = nil
-  end
+  STATE.seq = (STATE.seq or 0) + 1
+  STATE.pending[path] = STATE.seq
+  M.cancel_timer()
   STATE.timer = vim.uv.new_timer()
   STATE.timer:start(cfg.debounce_ms, 0, function()
-    vim.schedule(flush)
+    vim.schedule(function()
+      -- a fired one-shot timer stays open until something closes it
+      M.cancel_timer()
+      flush()
+    end)
   end)
+  return true
+end
+
+---Stop and close the debounce timer, if there is one.
+function M.cancel_timer()
+  if not STATE.timer then
+    return false
+  end
+  pcall(function()
+    STATE.timer:stop()
+    if not STATE.timer:is_closing() then
+      STATE.timer:close()
+    end
+  end)
+  STATE.timer = nil
   return true
 end
 
@@ -348,18 +413,16 @@ end
 
 function M.stop()
   if not STATE.running then
+    -- Still tidy up: a timer armed by an event that arrived during the last
+    -- stop would otherwise stay open for the session.
+    M.cancel_timer()
+    STATE.pending = {}
     return false, "not following"
   end
   if STATE.stop_fn then
     pcall(STATE.stop_fn)
   end
-  if STATE.timer then
-    pcall(function()
-      STATE.timer:stop()
-      STATE.timer:close()
-    end)
-    STATE.timer = nil
-  end
+  M.cancel_timer()
   STATE.running = false
   STATE.stop_fn = nil
   STATE.pending = {}

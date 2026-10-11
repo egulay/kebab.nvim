@@ -309,3 +309,100 @@ H.describe("the dependency flow reaches gradle", function()
     H.matches("group:artifact", deps.prompt_for("gradle"))
   end)
 end)
+
+-- Blanking comments with a pattern matched the first `//` on the line --
+-- including the one inside a repository URL -- which erased that line's
+-- closing brace from the scanned copy, so the top-level block was never found
+-- and :IdeAddDependency refused to add anything to an ordinary build file.
+H.describe("scanning a build file that is not trivial", function()
+  local function kts(body)
+    return table.concat({
+      'plugins { kotlin("jvm") version "2.0.0" }',
+      "repositories {",
+      "    mavenCentral()",
+      '    maven { url = uri("https://repo.spring.io/milestone") }',
+      "}",
+      "dependencies {",
+      body,
+      "}",
+      "",
+    }, "\n")
+  end
+
+  H.it("does not read a URL's // as a comment", function()
+    local text = kts('    implementation("org.slf4j:slf4j-api:2.0.13")')
+    local open_end, close_start = G.find_dependencies_block(text)
+    H.ok(open_end, "the block should be found despite the maven URL")
+    H.matches("slf4j%-api", text:sub(open_end, close_start - 1))
+
+    -- the Groovy spelling too
+    local groovy = table.concat({
+      "repositories {",
+      '    maven { url "https://plugins.gradle.org/m2/" }',
+      "}",
+      "dependencies {",
+      "    implementation 'org.slf4j:slf4j-api:2.0.13'",
+      "}",
+    }, "\n")
+    H.ok(G.find_dependencies_block(groovy), "and for Groovy")
+  end)
+
+  H.it("preserves every byte offset while blanking", function()
+    local text = kts('    implementation("a:b:1") // trailing')
+    for _, opts in ipairs({ { strings = false }, { strings = true } }) do
+      local blanked = G.blank(text, opts)
+      H.eq(#text, #blanked, "blanking must not move any offset")
+      H.eq(select(2, text:gsub("\n", "")), select(2, blanked:gsub("\n", "")), "newlines are kept")
+      H.falsy(blanked:find("// trailing", 1, true), "the comment should be gone")
+    end
+    H.matches("a:b:1", G.blank(text, { strings = false }), "a coordinate survives when strings are kept")
+    H.falsy(G.blank(text, { strings = true }):find("a:b:1", 1, true), "and not when they are not")
+  end)
+
+  H.it("does not count a brace inside a string literal", function()
+    -- the literal `}` used to make the nested block read as depth 0, so the
+    -- dependency went into subprojects { } and applied to every subproject
+    local text = table.concat({
+      'ext.closeBrace = "}"',
+      "subprojects {",
+      "    dependencies {",
+      "        implementation 'org.old:thing:1.0'",
+      "    }",
+      "}",
+      "dependencies {",
+      "    implementation 'org.slf4j:slf4j-api:2.0.13'",
+      "}",
+    }, "\n")
+    local open_end, close_start = G.find_dependencies_block(text)
+    H.ok(open_end, "a top-level block should be found")
+    local block = text:sub(open_end, close_start - 1)
+    H.matches("slf4j", block, "it must be the project's own block, got: " .. block)
+    H.falsy(block:find("org.old", 1, true), "not the one inside subprojects: " .. block)
+  end)
+end)
+
+H.describe("has_dependency and comments", function()
+  local jackson = { group = "com.fasterxml.jackson.core", artifact = "jackson-databind" }
+
+  H.it("does not count a commented-out declaration as present", function()
+    local text = table.concat({
+      "dependencies {",
+      '    // implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")',
+      "    implementation 'org.slf4j:slf4j-api:2.0.13'",
+      "}",
+    }, "\n")
+    H.falsy(G.has_dependency(text, jackson), "nothing depends on it, so adding it must be allowed")
+  end)
+
+  H.it("still finds a real declaration after an apostrophe in a comment", function()
+    -- the lone ' in "Jackson's" used to shift the quote pairing, so the real
+    -- coordinate was never seen and a duplicate line was appended
+    local text = table.concat({
+      "dependencies {",
+      "    // Jackson's databind",
+      "    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'",
+      "}",
+    }, "\n")
+    H.ok(G.has_dependency(text, jackson), "it is declared, so it must not be added twice")
+  end)
+end)

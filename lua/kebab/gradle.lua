@@ -28,27 +28,78 @@ function M.parse_coordinate(input)
   return require("kebab.maven").parse_coordinate(input)
 end
 
----Blank out line comments so a `dependencies {` inside one is not mistaken for
----the real block.
+---Blank out the parts of a build script that are not code.
 ---
----Replaced with spaces rather than removed, because every position this module
----returns indexes the *original* text. Shortening the string would shift every
----offset after the first comment -- which is exactly the bug this replaced.
+---Everything is replaced with spaces of the same length, never removed: every
+---position this module returns indexes the *original* text, so shortening the
+---string would shift every offset after the first comment.
 ---
----Line comments only; a block comment containing an unbalanced brace is rare
----enough to leave alone.
-local function blank_line_comments(text)
+---Matching `//` with a pattern is not enough: the first `//` on
+---`maven { url = uri("https://repo.spring.io/milestone") }` is inside a string
+---literal, and blanking from there erased that line's closing brace -- so the
+---brace counter never saw depth 0 and :IdeAddDependency refused to add
+---anything to a completely ordinary build file.
+---
+---@param text string
+---@param opts? { strings?: boolean } also blank the contents of string literals
+---@return string
+function M.blank(text, opts)
+  local blank_strings = opts and opts.strings
   local out = {}
-  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-    local code, comment = line:match("^(.-)(//.*)$")
-    if comment then
-      out[#out + 1] = code .. (" "):rep(#comment)
+  local i = 1
+  local n = #text
+  local function keep(from, to)
+    out[#out + 1] = text:sub(from, to)
+  end
+  local function spaces(from, to)
+    -- newlines are kept: the indentation lookup counts lines
+    out[#out + 1] = (text:sub(from, to):gsub("[^\n]", " "))
+  end
+
+  while i <= n do
+    local two = text:sub(i, i + 1)
+    local c = text:sub(i, i)
+    if two == "//" then
+      local stop = text:find("\n", i) or (n + 1)
+      spaces(i, stop - 1)
+      i = stop
+    elseif two == "/*" then
+      local stop = text:find("*/", i + 2, true)
+      stop = stop and (stop + 1) or n
+      spaces(i, stop)
+      i = stop + 1
+    elseif c == '"' or c == "'" then
+      -- triple-quoted forms exist in both dialects
+      local triple = text:sub(i, i + 2)
+      local closer = (triple == '"""' or triple == "'''") and triple or c
+      local j = i + #closer
+      while j <= n do
+        local here = text:sub(j, j)
+        if here == "\\" then
+          j = j + 2
+        elseif text:sub(j, j + #closer - 1) == closer then
+          j = j + #closer
+          break
+        elseif #closer == 1 and here == "\n" then
+          -- an unterminated single-quoted string ends at the newline
+          break
+        else
+          j = j + 1
+        end
+      end
+      local stop = math.min(j - 1, n)
+      if blank_strings then
+        spaces(i, stop)
+      else
+        keep(i, stop)
+      end
+      i = stop + 1
     else
-      out[#out + 1] = line
+      keep(i, i)
+      i = i + 1
     end
   end
-  -- gmatch above adds one trailing element for the sentinel newline
-  local joined = table.concat(out, "\n")
+  local joined = table.concat(out)
   return joined:sub(1, #text)
 end
 
@@ -62,7 +113,10 @@ end
 ---@return number|nil close_start the matching `}`
 ---@return string|nil indent the block's own indentation
 function M.find_dependencies_block(text)
-  local scan = blank_line_comments(text)
+  -- Strings blanked too, so a brace inside a literal -- `ext.closeBrace = "}"`
+  -- -- cannot make a nested `dependencies {` read as depth 0 and send the new
+  -- line into `subprojects { }` instead of the project's own block.
+  local scan = M.blank(text, { strings = true })
   local pos = 1
   while true do
     local s, e = scan:find("dependencies%s*{", pos)
@@ -113,7 +167,9 @@ function M.has_dependency(text, dep)
   if not open_end then
     return false
   end
-  local block = text:sub(open_end, close_start - 1)
+  -- Comments blanked, strings kept: a commented-out declaration must not read
+  -- as present, and the coordinates live inside the string literals.
+  local block = M.blank(text, { strings = false }):sub(open_end, close_start - 1)
   local needle = dep.group .. ":" .. dep.artifact
   -- "group:artifact" or "group:artifact:version", in either quote style
   for found in block:gmatch("[\"']([^\"']+)[\"']") do

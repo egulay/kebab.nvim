@@ -186,12 +186,41 @@ H.describe("following a change", function()
 end)
 
 H.describe("coalescing a burst", function()
+  ---Run `fn` while following a scratch directory.
+  local function following(fn)
+    local dir = H.tmpdir("burst")
+    local ok, err = F.start(dir)
+    if not ok then
+      H.skip("could not start a watcher: " .. tostring(err))
+    end
+    local ran, rerr = pcall(fn, dir)
+    F.stop()
+    if not ran then
+      error(rerr, 0)
+    end
+  end
+
   H.it("records a change worth following", function()
-    H.eq(true, F.on_change("/p/src/Main.java"))
+    following(function()
+      H.eq(true, F.on_change("/p/src/Main.java"))
+    end)
   end)
 
   H.it("drops an ignored path without arming the timer", function()
-    H.eq(false, F.on_change("/p/target/x.class"))
+    following(function()
+      H.eq(false, F.on_change("/p/target/x.class"))
+    end)
+  end)
+
+  -- STATE.stop_fn is an asynchronous SIGINT, so whatever inotifywait had
+  -- already written is still delivered after stop() returns. Acting on it
+  -- moved the view after the user turned following off, and armed a debounce
+  -- timer that stop() could never close -- one leaked libuv handle per
+  -- stop-mid-burst, for the rest of the session.
+  H.it("ignores an event that arrives after stop", function()
+    H.falsy(F.running(), "this starts from off")
+    H.eq(false, F.on_change("/p/src/Main.java"), "a change with nothing watching is not ours")
+    H.falsy(F.cancel_timer(), "and no timer should have been armed")
   end)
 
   H.it("has a debounce window, so a 40-file refactor is watchable", function()
@@ -270,5 +299,76 @@ H.describe("the follow commands", function()
     end)
     H.ok(H.notified(notes, "Follow: off"))
     H.eq(false, F.running())
+  end)
+end)
+
+-- The two follow modes were effectively swapped and sorted by name:
+-- STATE.pending was a plain set, so insertion order was irrecoverable and
+-- table.sort made "latest" mean "alphabetically last".
+H.describe("which file of a burst wins", function()
+  local function burst(mode, order)
+    local dir = H.tmpdir("burst-order-" .. mode)
+    vim.fn.mkdir(dir .. "/src", "p")
+    for _, name in ipairs(order) do
+      H.write(dir .. "/src/" .. name, name)
+      vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/src/" .. name))
+    end
+    local saved = vim.g.kebab_follow
+    vim.g.kebab_follow = { follow = mode, debounce_ms = 20 }
+    local ok, err = F.start(dir)
+    if not ok then
+      vim.g.kebab_follow = saved
+      H.skip("could not start a watcher: " .. tostring(err))
+    end
+    for _, name in ipairs(order) do
+      F.on_change(dir .. "/src/" .. name)
+    end
+    H.wait(3000, function()
+      return F.state().pending == 0
+    end, "the burst should flush")
+    local landed = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t")
+    F.stop()
+    vim.g.kebab_follow = saved
+    return landed
+  end
+
+  -- zebra changes first, alpha second: name order and arrival order disagree
+  H.it("'latest' follows the most recent change, not the last by name", function()
+    H.eq("alpha.txt", burst("latest", { "zebra.txt", "alpha.txt" }))
+  end)
+
+  H.it("'first' follows the first change, not the first by name", function()
+    H.eq("zebra.txt", burst("first", { "zebra.txt", "alpha.txt" }))
+  end)
+end)
+
+-- tbl_deep_extend REPLACES a list rather than merging it, so setting one entry
+-- un-ignored node_modules, build, .venv and the rest -- and un-ignoring .swp
+-- made the follower chase Vim's own swap writes.
+H.describe("configuring the ignore lists", function()
+  H.it("adds to the built-in list rather than replacing it", function()
+    with_config({ ignored_dirs = { "generated" } }, function()
+      local cfg = F.config()
+      H.ok(vim.tbl_contains(cfg.ignored_dirs, "generated"), "the new entry should be there")
+      H.ok(vim.tbl_contains(cfg.ignored_dirs, "node_modules"), "and so should the built-ins")
+      H.ok(F.ignored("/p/node_modules/a/b.js"), "node_modules must still be ignored")
+      H.ok(F.ignored("/p/build/out.js"))
+      H.ok(F.ignored("/p/generated/x.js"), "and the new one too")
+    end)
+  end)
+
+  H.it("keeps ignoring swap files when a suffix is added", function()
+    with_config({ ignored_suffixes = { ".bak" } }, function()
+      H.ok(F.ignored("/p/a.swp"), "or the follower chases its own swap writes")
+      H.ok(F.ignored("/p/a.bak"))
+      H.ok(F.ignored("/p/a.class"))
+    end)
+  end)
+
+  H.it("can still be told to replace them outright", function()
+    with_config({ replace_ignores = true, ignored_dirs = { "only" }, ignored_suffixes = {} }, function()
+      H.falsy(F.ignored("/p/node_modules/a.js"), "an explicit opt-out has to be possible")
+      H.ok(F.ignored("/p/only/a.js"))
+    end)
   end)
 end)
