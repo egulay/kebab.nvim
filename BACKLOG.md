@@ -42,7 +42,7 @@ Ordered by how much friction it removes day to day.
 
 ## Ghost programming (built)
 
-`:IdeFollow` / `<leader>uf` / View › Follow External Edits. Off by default.
+`:IdeFollow` / `<leader>uf` / View › Follow External Edits. **On by default**; the keymap turns it off.
 
 When a file changes on disk, the view moves to it and the cursor to the first
 changed line, which is briefly highlighted. Watching is via `vim._watch`'s
@@ -64,7 +64,10 @@ What it refuses to do, which is most of the design:
   signal. A directory called `build-tools` is *not* ignored.
 
 Configure with `vim.g.kebab_follow = { debounce_ms = 250, follow = "latest",
-open_new = false }`.
+open_new = true }`. `vim.g.kebab_follow_autostart = false` stops it starting
+itself, and `vim.g.kebab_follow_roots` names other projects to watch -- a
+watcher only ever sees its own tree, so an agent working in a repo you do not
+have open needs naming.
 
 Still missing: the highlight marks the first changed line, not the whole
 changed region, and there is no history of what was followed. It also cannot

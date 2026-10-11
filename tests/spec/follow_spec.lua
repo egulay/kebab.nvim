@@ -179,13 +179,16 @@ H.describe("following a change", function()
     end)
   end)
 
-  H.it("ships with open_new off, whatever this machine's config says", function()
-    -- the declared default, read with the user's config neutralised
+  H.it("ships with open_new ON, whatever this machine's config says", function()
+    -- The declared default, read with the user's config neutralised. On,
+    -- because an agent creating files is the normal case and not following
+    -- them is what makes the feature look broken. It is not 40 buffers for 40
+    -- files: a burst is coalesced and only the chosen file is opened.
     local saved = vim.g.kebab_follow
     vim.g.kebab_follow = nil
     local default = F.config().open_new
     vim.g.kebab_follow = saved
-    H.eq(false, default, "the shipped default is off; a config may turn it on")
+    H.eq(true, default, "the shipped default is on; a config may turn it off")
   end)
 
   H.it("opens a new file when asked to", function()
@@ -252,8 +255,11 @@ H.describe("coalescing a burst", function()
 end)
 
 H.describe("the watcher", function()
-  H.it("is off by default", function()
-    H.eq(false, F.running())
+  -- The suite pins kebab_follow_autostart off (tests/run.lua), because a live
+  -- watcher would move buffers around under the specs. What ships is *on*, and
+  -- the autostart tests below cover that.
+  H.it("reports nothing when it is not running", function()
+    H.eq(false, F.running(), "the suite pins autostart off")
     H.eq("", F.status(), "nothing in the statusline when off")
   end)
 
@@ -431,20 +437,21 @@ H.describe("starting itself", function()
     )
   end)
 
-  H.it("does nothing when the flag is off", function()
-    with_autostart(nil, function()
+  H.it("can be turned off outright", function()
+    with_autostart(false, function()
       H.falsy(F.running())
       vim.api.nvim_exec_autocmds("BufEnter", { modeline = false })
-      H.drain(200)
-      H.falsy(F.running(), "it must stay off unless asked for")
+      H.drain(300)
+      H.falsy(F.running(), "`= false` must mean off, with no watcher started")
     end)
   end)
 
-  H.it("starts without a keypress when the flag is on", function()
+  H.it("starts without a keypress by default", function()
     if vim.fn.executable("inotifywait") == 0 then
       H.skip("inotify-tools is needed to start a watcher")
     end
-    with_autostart(true, function()
+    -- nil, not true: this is what a user who has configured nothing gets
+    with_autostart(nil, function()
       H.falsy(F.running(), "this starts from off")
       vim.api.nvim_exec_autocmds("BufEnter", { modeline = false })
       local started = vim.wait(10000, function()

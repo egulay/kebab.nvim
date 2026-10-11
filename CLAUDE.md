@@ -390,6 +390,12 @@ client attached, file contents reverted.
 - A debounce set keyed by path **loses arrival order**: `follow`'s "latest" and
   "first" were both `table.sort` plus an end, i.e. alphabetical -- effectively
   swapping the two modes. `STATE.pending[path]` holds a sequence number now.
+- **Ghost Mode ships ON**: `kebab_follow_autostart` defaults to on and
+  `open_new` to true, because needing a keypress is how the feature ends up
+  looking dead. `= false` turns each off. `tests/run.lua` pins autostart off
+  for the suite, since a live watcher would move buffers under the specs.
+  `open_new = true` does not mean 40 buffers for 40 files: a burst is coalesced
+  and only the chosen file of each flush is opened.
 - **`vim.g.kebab_follow_autostart` is read in the callback, never at setup
   time.** `follow.setup()` is called from another spec's `init` and lazy does
   not order `init` functions, so deciding early meant the autocmd was simply

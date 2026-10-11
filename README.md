@@ -41,7 +41,7 @@ charge, this adds the IDE on top.
   committed so your team gets them too.
 - **Follow external edits** (`<leader>uf`): when something outside the editor
   changes a file — an AI agent working in the project, say — the view moves to
-  the line that changed. Off by default, yields to your own typing, and never
+  the line that changed. On by default, yields to your own typing, and never
   reloads over unsaved changes.
 - **Projects**: create from a wizard or scaffold into the folder you are already
   in; open any project found under your usual roots — from inside the editor or

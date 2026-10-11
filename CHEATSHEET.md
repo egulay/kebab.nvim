@@ -350,7 +350,7 @@ will resolve against the system interpreter instead of your venv.
 
 ## Following edits made outside the editor
 
-`<leader>uf`, or `:IdeFollow`. Off by default — or automatic, see below.
+**On by default.** `<leader>uf` or `:IdeFollow` turns it off for the session.
 
 When something else changes a file in the project — an AI agent working in it,
 another editor, a formatter, a `git checkout` — the view moves to that file and
@@ -386,19 +386,18 @@ not focusable and has no mappings — it cannot take your cursor. It appears whe
 following starts and goes away when it stops, including when following stops on
 its own.
 
-### Having it on without pressing anything
+### It is on already
 
-For watching an AI agent work, the two settings that matter:
+Opening a project starts the watcher, the badge appears by itself, and a file an
+agent edits **or creates** pulls the view across with the cursor on the first
+changed line. Nothing to configure.
+
+`<leader>uf` turns it off, and a stop you asked for sticks — it will not restart
+itself until you open another project. To have it off from the start:
 
 ```lua
-vim.g.kebab_follow_autostart = true          -- start it for every project
-vim.g.kebab_follow = { open_new = true }     -- follow files it *creates* too
+vim.g.kebab_follow_autostart = false
 ```
-
-With those, opening a project starts the watcher, the badge appears by itself,
-and a file the agent edits **or adds** pulls the view across with the cursor on
-the first changed line. `<leader>uf` still turns it off, and a stop you asked
-for sticks — it will not restart itself until you open another project.
 
 An agent working in a repo you do *not* have open is a different tree, and a
 watcher only ever sees its own. Name it:
@@ -416,7 +415,7 @@ of `~/Projects`, or you can exhaust `fs.inotify.max_user_watches`.
 vim.g.kebab_follow = {
   debounce_ms = 250,     -- coalesce a burst; the latest change wins
   follow = "latest",     -- or "first", to stay put during a big refactor
-  open_new = false,      -- open files that are not already in a buffer
+  open_new = true,       -- open files that are not already in a buffer
 }
 
 vim.g.kebab_follow_indicator = false   -- no panel at all

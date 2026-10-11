@@ -51,9 +51,13 @@ function M.config()
     -- "latest" follows the most recent change; "first" stays on the first file
     -- of a burst, which is calmer when a refactor touches many files.
     follow = "latest",
-    -- Open a file that is not already in a buffer. Off by default: an agent
-    -- writing 40 new files should not open 40 buffers.
-    open_new = false,
+    -- Open a file that is not already in a buffer.
+    --
+    -- On, because an agent creating files is the normal case and not following
+    -- them is what makes this look broken. It does not mean 40 buffers for 40
+    -- files: a burst is coalesced and only the chosen file of each flush is
+    -- opened, so it is one buffer per burst.
+    open_new = true,
     highlight_ms = 1200,
   }
   local user = vim.g.kebab_follow
@@ -593,17 +597,21 @@ function M.setup()
     end,
   })
 
-  -- Opt-in auto-start, via vim.g.kebab_follow_autostart. Off by default,
-  -- because a watcher that moves your cursor should be asked for -- but having
-  -- to press <leader>uf in every session is how you end up believing the
-  -- feature does not work at all.
+  -- Auto-start, unless `vim.g.kebab_follow_autostart = false`.
+  --
+  -- On by default because this is the feature's whole point: having to press
+  -- <leader>uf in every session is how you end up believing it does not work
+  -- at all. It stays out of your way rather than asking permission -- see
+  -- M.yielding, which refuses to move the view while you are typing, have
+  -- unsaved changes, or have a picker open -- and <leader>uf turns it off for
+  -- the session.
   --
   -- The flag is read inside the callback, never here. setup() is called from
   -- another spec's `init`, and lazy does not order `init` functions, so
   -- deciding at setup time meant the autocmd was never registered whenever
   -- that init happened to run before the one setting the flag.
   local function autostart()
-    if vim.g.kebab_follow_autostart ~= true or M.running() or STATE.suppress_autostart then
+    if vim.g.kebab_follow_autostart == false or M.running() or STATE.suppress_autostart then
       return
     end
     -- Once per tree. BufEnter fires constantly, and `M.running()` alone was
