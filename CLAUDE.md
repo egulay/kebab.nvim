@@ -32,7 +32,7 @@ Keep `~/.config/nvim` otherwise untouched: `theme.lua`, `all-themes.lua` and
 
 ```
 lua/kebab/
-├── jdk.lua              JDK discovery (no hardcoded paths)
+├── jdk.lua              JDK discovery (no hardcoded paths; vim.g.kebab_jdk_roots)
 ├── explorer.lua         always-on project tree
 ├── project.lua          :IdeNewProject / :IdeOpenProject / :IdeInitHere
 │                        M.create() is the non-interactive half
@@ -267,6 +267,16 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- JDT's execution environments are **`JavaSE-1.8` and below for 8 and below**,
+  `JavaSE-9` and up after that. `JavaSE-8` is rejected with "Invalid runtime for
+  JavaSE-8" and the entry dropped -- so a Java 8 project was analysed against
+  whatever JVM jdtls itself runs on. `jdk.ee_name` owns the spelling.
+- A macOS bundle JDK is `<x>.jdk/Contents/Home`, so its **basename is "Home"**
+  and a version read from the basename found nothing. Walking up the path
+  blindly is not the fix either -- it reads a version out of an unrelated
+  ancestor directory (a scratch path gave `JavaSE-1.4`). Match the bundle
+  component specifically, then fall back to the JDK's own `release` file, which
+  every layout has.
 - **lazy.nvim replaces `init`, it does not chain it.** Declaring `init` on the
   neo-tree fragment silently dropped LazyVim's, whose autocmd is what opens the
   tree for `nvim <dir>` -- so a directory argument gave one plain window and no
