@@ -66,6 +66,7 @@ lua/kebab/
 ├── git.lua              the hand-rolled revert, testable without a tree window
 ├── path.lua             expand a path WITHOUT vim.fn.expand's shell expansion
 ├── jsonfile.lua         pretty-print JSON for a hand-editable file; jq optional
+├── run.lua              marker gating for language tasks (overseer provider)
 ├── menus/
 │   ├── action.lua       introspectable menu actions -- build every entry here
 │   ├── editor.lua       right-click: Project/File/Edit/Code/Run/Git/View
@@ -266,6 +267,15 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **overseer's `condition` understands `filetype`, `dir` and `tags` only.**
+  `condition = { callback = fn }` is accepted and then silently ignored, so all
+  32 marker-gated language tasks were offered in every project. Marker gating
+  goes through a **provider** (`kebab.run.marker_provider`), which is also the
+  only way to test the directory being searched rather than Neovim's cwd.
+  overseer has **no `priority`** either -- a template carrying one is cargo
+  cult, and the test that asserted kebab's own two constants against each other
+  could not fail. `register_template` is what validates a definition; the
+  validator itself is a local.
 - **A driver may compile only the first statement** of a multi-statement
   payload -- SQLite's does -- so `Statement.execute(script)` silently ran one
   insert of two and still reported success. `KebabJdbc.splitStatements` splits

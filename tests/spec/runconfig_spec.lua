@@ -226,10 +226,30 @@ H.describe("turning a configuration into a task", function()
     H.eq("/proj", RC.to_template({ name = "a", cmd = "echo" }, "/proj").builder().cwd)
   end)
 
-  H.it("ranks project configurations above the generic language tasks", function()
-    local generic = 10 -- what languages/*.lua use
-    H.ok(RC.to_template({ name = "a", cmd = "echo" }, "/p").priority < generic,
-      "yours should come first in the task list")
+  -- There used to be a `priority` field here, and a test asserting kebab's own
+  -- two constants against each other. overseer has no priority concept -- its
+  -- condition_matches understands filetype, dir and tags and nothing else --
+  -- so the field was dead and the test could not fail. What is worth asserting
+  -- is that the definition is one overseer will actually accept.
+  H.it("produces a template definition overseer accepts", function()
+    local t = RC.to_template({ name = "kebab-spec-template", cmd = { "./mvnw" }, args = { "spring-boot:run" } }, "/p")
+    H.eq("kebab-spec-template", t.name)
+    H.eq("string", type(t.desc), "a non-string desc makes overseer drop the template")
+    H.eq("function", type(t.builder))
+    H.eq(nil, t.priority, "overseer has no priority; carrying one is cargo cult")
+    -- register_template is what validates it; the validator itself is a local
+    local ok, err = pcall(function()
+      require("lazy").load({ plugins = { "overseer.nvim" } })
+      require("overseer").register_template(t)
+    end)
+    H.ok(ok, "overseer should accept it: " .. tostring(err))
+
+    -- and it rejects the shape that used to slip through
+    local bad = RC.to_template({ name = "kebab-spec-bad", cmd = { "echo" } }, "/p")
+    bad.desc = 5
+    H.errors(function()
+      require("overseer").register_template(bad)
+    end, "a non-string desc should be rejected, not silently dropped")
   end)
 
   H.it("does not share mutable state between runs", function()

@@ -183,7 +183,6 @@ function M.to_template(config, root)
   return {
     name = config.name,
     desc = config.desc or (M.FILE .. " · " .. table.concat(cmd, " ")),
-    priority = config.priority or 5, -- above the generic language tasks
     builder = function()
       local cwd = config.cwd
       if cwd == nil or cwd == "" or cwd == "." then
