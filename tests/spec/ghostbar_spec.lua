@@ -6,13 +6,22 @@ local G = require("kebab.ghostbar")
 local F = require("kebab.follow")
 
 ---Run `fn` with follow.running() reporting `value`.
+---
+---The indicator config is pinned to the shipped default too. The suite boots
+---the real user config on purpose, so a config that sets
+---`vim.g.kebab_follow_indicator` -- turning the panel off, say -- would
+---otherwise fail every test here, which is a legitimate setting and not a
+---regression. A test that wants a particular config sets it *inside* `fn`.
 local function pretending(value, fn)
   local real = F.running
+  local saved = vim.g.kebab_follow_indicator
+  vim.g.kebab_follow_indicator = nil
   F.running = function()
     return value
   end
   local ok, err = pcall(fn)
   F.running = real
+  vim.g.kebab_follow_indicator = saved
   if not ok then
     error(err, 0)
   end
@@ -69,16 +78,14 @@ H.describe("the Ghost Mode panel", function()
   end)
 
   H.it("falls back to a change count once the filename is stale", function()
-    local saved = vim.g.kebab_follow_indicator
-    -- an activity window of 0ms, so the name is stale immediately
-    vim.g.kebab_follow_indicator = { activity_ms = 0 }
     pretending(true, function()
+      -- an activity window of 0ms, so the name is stale immediately
+      vim.g.kebab_follow_indicator = { activity_ms = 0 }
       G.show()
       G.activity("/x/Thing.java")
       H.matches("1 change", G.state().text, "it should report the count: " .. G.state().text)
       G.hide()
     end)
-    vim.g.kebab_follow_indicator = saved
   end)
 
   H.it("stops itself when following ends", function()
@@ -97,14 +104,12 @@ H.describe("the Ghost Mode panel", function()
   end)
 
   H.it("can be turned off", function()
-    local saved = vim.g.kebab_follow_indicator
-    vim.g.kebab_follow_indicator = false
     pretending(true, function()
+      vim.g.kebab_follow_indicator = false
       H.falsy(G.show(), "show should decline when the indicator is disabled")
       H.falsy(G.state().showing)
       H.eq(0, panels())
     end)
-    vim.g.kebab_follow_indicator = saved
   end)
 
   H.it("survives the window being closed by hand", function()
@@ -156,12 +161,21 @@ H.describe("follow turns the panel on and off by itself", function()
     if vim.fn.executable("inotifywait") == 0 then
       H.skip("inotify-tools is needed to start a watcher")
     end
-    local dir = H.tmpdir("ghost-follow")
-    local ok, err = F.start(dir)
-    H.ok(ok, tostring(err))
-    H.ok(G.state().showing, "the indicator should appear without being asked for")
-    H.ok(F.stop())
-    H.falsy(G.state().showing, "and go away when following stops")
-    H.falsy(G.state().animating)
+    -- Pinned to the shipped default: a config that turns the panel off is a
+    -- legitimate setting, and this test is about follow wiring it up, not
+    -- about whether this machine wants it.
+    local saved = vim.g.kebab_follow_indicator
+    vim.g.kebab_follow_indicator = nil
+    local ran, err = pcall(function()
+      local ok, serr = F.start(H.tmpdir("ghost-follow"))
+      H.ok(ok, tostring(serr))
+      H.ok(G.state().showing, "the indicator should appear without being asked for")
+      H.ok(F.stop())
+      H.falsy(G.state().showing, "and go away when following stops")
+      H.falsy(G.state().animating)
+    end)
+    pcall(F.stop)
+    vim.g.kebab_follow_indicator = saved
+    H.ok(ran, tostring(err))
   end)
 end)

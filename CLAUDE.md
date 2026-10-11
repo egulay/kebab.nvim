@@ -483,6 +483,20 @@ records what each one points at -- a bare `cmd = function() ... end` fails the
 sweep on purpose. Use `A.custom(label, fn, check)` when the logic really is
 bespoke; the `check` is mandatory.
 
+**A spec must never assert a default it did not pin.** The suite boots the real
+user config on purpose, so any `vim.g.kebab_*` the author sets is live during
+the run -- and a spec reading the ambient value fails for a setting that is
+perfectly legitimate. This bit three specs the moment
+`vim.g.kebab_follow = { open_new = true }` went into the live config. Set the
+global inside the test (there is a `with_config` helper in `follow_spec`), and
+assert the shipped default only with the global explicitly cleared. Check with:
+
+```bash
+nvim -n --headless --cmd "set runtimepath+=$PWD" \
+  --cmd 'lua vim.g.kebab_db_preview_limit = 5' \
+  -c "luafile $PWD/tests/run.lua"
+```
+
 **Traps the harness had to work around.** Both are load-bearing; do not undo
 them:
 

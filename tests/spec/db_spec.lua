@@ -308,24 +308,34 @@ H.describe("reading a real database", function()
     H.matches("2", table.concat(lines, "\n"))
   end)
 
+  -- The limit is pinned, not assumed: the suite boots the real user config on
+  -- purpose, so a config that sets kebab_db_preview_limit would otherwise fail
+  -- this -- which is a legitimate setting, not a regression.
   H.it("opens a table's rows in a buffer, the way clicking one does", function()
     requires_jdbc()
     local c = fixture()
-    H.ok(D.open_table(c, "customers"))
-    local name = vim.api.nvim_buf_get_name(0)
-    H.matches("kebab%-db://shop/customers", name)
-    local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
-    H.matches('select %* from "customers" limit 200', text, "it should show the query it ran")
-    H.matches("Ada Lovelace", text)
-    H.falsy(vim.bo.modifiable, "a result grid should not be editable")
-    vim.cmd("bwipeout!")
+    local saved = vim.g.kebab_db_preview_limit
+    vim.g.kebab_db_preview_limit = 200
+    local ok, err = pcall(function()
+      H.ok(D.open_table(c, "customers"))
+      local name = vim.api.nvim_buf_get_name(0)
+      H.matches("kebab%-db://shop/customers", name)
+      local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+      H.matches('select %* from "customers" limit 200', text, "it should show the query it ran")
+      H.matches("Ada Lovelace", text)
+      H.falsy(vim.bo.modifiable, "a result grid should not be editable")
+      vim.cmd("bwipeout!")
+    end)
+    vim.g.kebab_db_preview_limit = saved
+    H.ok(ok, tostring(err))
   end)
 
   H.it("caps the preview rather than pulling a whole table", function()
-    H.eq(200, D.preview_limit())
     local saved = vim.g.kebab_db_preview_limit
+    vim.g.kebab_db_preview_limit = nil
+    H.eq(200, D.preview_limit(), "the shipped default")
     vim.g.kebab_db_preview_limit = 10
-    H.eq(10, D.preview_limit())
+    H.eq(10, D.preview_limit(), "and a config overrides it")
     vim.g.kebab_db_preview_limit = saved
   end)
 end)

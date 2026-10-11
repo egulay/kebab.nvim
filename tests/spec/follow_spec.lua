@@ -165,12 +165,27 @@ H.describe("following a change", function()
     H.reset_editor()
   end)
 
-  H.it("leaves a file that is not open alone by default", function()
-    local path = H.tmpdir("follow-closed") .. "/new.txt"
-    H.write(path, "appeared")
-    local line, reason = F.follow_file(path)
-    H.eq(nil, line)
-    H.eq("not open", reason, "an agent writing 40 files should not open 40 buffers")
+  -- Pinned, not ambient. The suite boots the real user config on purpose, so a
+  -- spec asserting a *default* has to set it: this failed the moment the
+  -- author's own config set `open_new = true`, which is a legitimate thing to
+  -- want and not a regression in the layer.
+  H.it("leaves a file that is not open alone when open_new is off", function()
+    with_config({ open_new = false }, function()
+      local path = H.tmpdir("follow-closed") .. "/new.txt"
+      H.write(path, "appeared")
+      local line, reason = F.follow_file(path)
+      H.eq(nil, line)
+      H.eq("not open", reason, "an agent writing 40 files should not open 40 buffers")
+    end)
+  end)
+
+  H.it("ships with open_new off, whatever this machine's config says", function()
+    -- the declared default, read with the user's config neutralised
+    local saved = vim.g.kebab_follow
+    vim.g.kebab_follow = nil
+    local default = F.config().open_new
+    vim.g.kebab_follow = saved
+    H.eq(false, default, "the shipped default is off; a config may turn it on")
   end)
 
   H.it("opens a new file when asked to", function()
