@@ -16,12 +16,9 @@ vim.cmd("cd " .. vim.fn.fnameescape(sandbox))
 -- lazy.nvim installs/loads asynchronously; VeryLazy is what brings in the
 -- globals the menus reference.
 local function settle()
-
--- Everything vim.notify received while the editor started, kept separate from
--- the running log: specs deliberately provoke warnings of their own, so the
--- "startup is silent" assertion needs a snapshot rather than a growing list.
-H.startup_notifications = vim.deepcopy(H.notify_log)
-H.notify_log = {}
+  -- Start recording before the async half of startup runs, or the snapshot
+  -- below has nothing in it whatever and the "startup is silent" assertions
+  -- are vacuous.
   local ok = vim.wait(60000, function()
     return package.loaded["lazy"] ~= nil and _G.LazyVim ~= nil
   end, 100)
@@ -44,8 +41,21 @@ H.notify_log = {}
   vim.wait(300, function() return false end, 50)
   -- Must happen before any spec touches vim.notify. See the comment on
   -- H.install_notify_baseline: restoring LazyVim's queueing stand-in makes its
-  -- replay feed itself until Lua overflows.
+  -- replay feed itself until Lua overflows. *Chaining* onto it is just as bad:
+  -- a wrapper that recorded and then called through to the stand-in hung the
+  -- suite for the same reason. So nothing may observe vim.notify before here.
   H.install_notify_baseline()
+
+  -- Everything vim.notify received from the baseline onward, kept apart from
+  -- the running log: specs provoke warnings of their own, so "startup is
+  -- silent" needs a snapshot rather than a growing list. The sentinel is what
+  -- lets a spec tell "nothing warned" from "nothing was recorded at all" --
+  -- this snapshot used to be taken at the top of settle(), before lazy had
+  -- loaded, so it was always empty and the assertions over it could not fail.
+  vim.notify(H.STARTUP_SENTINEL, vim.log.levels.INFO)
+  vim.wait(200, function() return false end, 20)
+  H.startup_notifications = vim.deepcopy(H.notify_log)
+  H.notify_log = {}
 end
 
 settle()
@@ -83,9 +93,17 @@ for _, file in ipairs(files) do
   end
 end
 
+local r = H.report()
+
+-- A run in which nothing executed is not a pass. A stale or mistyped filter,
+-- or an empty tests/spec glob, would otherwise exit 0 and read exactly like a
+-- green suite.
 if ran == 0 then
-  io.write("no specs matched " .. tostring(only) .. "\n")
+  io.write(("no specs matched %s -- nothing ran, so nothing passed\n"):format(tostring(only)))
+  vim.cmd("cq 2")
+elseif r.pass == 0 and r.fail == 0 then
+  io.write("specs ran but made no assertions\n")
+  vim.cmd("cq 2")
 end
 
-local r = H.report()
 vim.cmd(r.fail > 0 and "cq 1" or "qa!")

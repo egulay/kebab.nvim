@@ -92,6 +92,18 @@ H.describe("a quiet startup", function()
       end
     end
     H.eq({}, warnings, "startup should be silent")
+    -- The snapshot used to be taken at the top of settle(), before lazy had
+    -- loaded, so it was always empty. It is taken after VeryLazy now, but
+    -- startup here is genuinely silent -- so without a sentinel this assertion
+    -- and the one above iterate an empty list and cannot fail even if the
+    -- recording itself breaks.
+    local saw_sentinel = false
+    for _, n in ipairs(H.startup_notifications) do
+      if n.msg == H.STARTUP_SENTINEL then
+        saw_sentinel = true
+      end
+    end
+    H.ok(saw_sentinel, "the startup notification log recorded nothing, so these assertions prove nothing")
   end)
 
   H.it("does not call deprecated dap APIs", function()

@@ -100,6 +100,10 @@ H.notify_log = {}
 ---tests/run.lua once startup has settled.
 H.startup_notifications = {}
 
+---Emitted into the startup log on purpose, so a spec can tell "startup was
+---silent" from "nothing was ever recorded".
+H.STARTUP_SENTINEL = "kebab-test: startup notification logger is live"
+
 -- LazyVim.lazy_notify() installs a queueing stand-in as vim.notify and only
 -- swaps the original back when something *else* replaces it. That makes
 -- "capture vim.notify, then restore it" actively dangerous: restoring puts the
