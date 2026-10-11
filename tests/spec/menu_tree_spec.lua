@@ -139,16 +139,35 @@ H.describe("tree mappings", function()
     ga = "git_add_file",
     gu = "git_unstage_file",
     gt = "git_toggle_file_stage",
-    gr = "git_revert_file",
     gc = "git_commit",
     gp = "git_push",
     gl = "git_pull",
+    gA = "git_add_all",
+    gU = "git_undo_last_commit",
   }
   for key, command in pairs(expected) do
     H.it(("%s is bound to %s"):format(key, command), function()
       H.eq(command, mappings[key], ("tree mapping %q"):format(key))
     end)
   end
+
+  -- gr is deliberately NOT neo-tree's git_revert_file: that is a plain
+  -- `git checkout HEAD -- <path>`, which ignores untracked files -- the exact
+  -- bug kebab.git's hand-written revert exists to fix. The menu advertises gr
+  -- for "Revert / Discard Changes", so gr has to be that.
+  for _, key in ipairs({ "gr", "gy", "gY" }) do
+    H.it(("%s runs one of this layer's own actions"):format(key), function()
+      H.ok(A.callable(mappings[key]), ("tree mapping %q should be a function"):format(key))
+    end)
+  end
+
+  H.it("gr is this layer's revert, not neo-tree's", function()
+    H.falsy(mappings["gr"] == "git_revert_file", "git_revert_file leaves untracked files behind")
+    local actions = require("kebab.menus.tree").actions
+    H.eq("function", type(actions.revert))
+    H.eq("function", type(actions.copy_absolute_path))
+    H.eq("function", type(actions.copy_relative_path))
+  end)
 
   H.it("single left click expands a folder but never opens a file", function()
     -- The mouse half of the brief: a stray click in the tree must not open a
@@ -157,19 +176,54 @@ H.describe("tree mappings", function()
     H.ok(A.callable(handler), "<LeftRelease> should be mapped to a function")
   end)
 
-  H.it("the menu's git shortcuts all exist as tree mappings", function()
-    -- rtxt is what the menu prints next to each entry; anything it claims for
-    -- the git submenu should really be bound in the tree.
-    local by_key = {}
-    for _, leaf in ipairs(flat.leaves) do
-      if leaf.label:match("^Git › ") and leaf.entry.rtxt and leaf.entry.rtxt:match("^g%l$") then
-        by_key[leaf.entry.rtxt] = leaf.label
+  -- This used to filter rtxt to `^g%l$`, which is two lowercase characters
+  -- beginning with g -- so it could not see `gU`, `gA`, `gy`, `gY` or `A`, and
+  -- every one of those was wrong. The sweep now reads the keys a *live* tree
+  -- buffer actually has, which also covers neo-tree's and LazyVim's own.
+  H.it("every shortcut the tree menu prints is really bound in the tree", function()
+    require("lazy").load({ plugins = { "neo-tree.nvim" } })
+    local dir = H.tmpdir("menu-keys")
+    H.write(dir .. "/a.txt", "x")
+    local cmd = require("neo-tree.command")
+    pcall(cmd.execute, { action = "show", dir = dir })
+    H.wait(5000, function()
+      for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if vim.bo[vim.api.nvim_win_get_buf(w)].filetype == "neo-tree" then
+          return true
+        end
+      end
+      return false
+    end, "a neo-tree window should open")
+
+    local tree_buf
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(w)
+      if vim.bo[buf].filetype == "neo-tree" then
+        tree_buf = buf
       end
     end
-    H.ok(vim.tbl_count(by_key) >= 6, "expected the git submenu to advertise g-keys")
-    for key, label in pairs(by_key) do
-      H.ok(mappings[key] ~= nil, ("%s advertises %q, which is not mapped in the tree"):format(label, key))
+    H.ok(tree_buf, "the tree buffer should be findable")
+
+    local bound = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(tree_buf, "n")) do
+      bound[m.lhs] = true
     end
+
+    local missing = {}
+    local checked = 0
+    for _, leaf in ipairs(flat.leaves) do
+      local rtxt = leaf.entry.rtxt
+      -- <leader>… entries are global keymaps, covered by keymaps_spec
+      if rtxt and rtxt ~= "" and not rtxt:match("^<leader>") then
+        checked = checked + 1
+        if not bound[rtxt] then
+          missing[#missing + 1] = ("%s advertises %q"):format(leaf.label, rtxt)
+        end
+      end
+    end
+    H.ok(checked >= 20, "expected plenty of advertised keys, got " .. checked)
+    H.eq({}, missing, "an advertised key that is not bound is worse than none")
+    H.reset_editor()
   end)
 end)
 

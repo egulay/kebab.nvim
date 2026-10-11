@@ -47,6 +47,14 @@ return {
       -- namespace has to be the shifted one, and a group prefix cannot also be
       -- a mapping. LazyVim's sql extra binds <leader>D to this directly; that
       -- override is declared in tests/spec/keymaps_spec.lua.
+      --
+      -- `false` is how lazy.nvim *removes* an inherited key. Declaring
+      -- <leader>DD alone does not take <leader>D away -- lazy merges `keys`
+      -- lists rather than replacing them -- so <leader>D stayed a live
+      -- DBUIToggle mapping as well as the group prefix. Pressing <leader>Dt at
+      -- typing speed then toggled the DB explorer and swallowed the `t`,
+      -- because which-key runs a node that is both a keymap and a group.
+      { "<leader>D", false },
       { "<leader>DD", "<cmd>DBUIToggle<cr>", desc = "Database Explorer" },
     },
   },

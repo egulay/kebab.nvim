@@ -123,12 +123,21 @@ local function copy_path(how)
     kind = "custom",
     label = "copy path (" .. how .. ")",
     check = function()
-      -- fnamemodify is the whole implementation; prove the modifier is one it
-      -- understands rather than silently yielding the unchanged path.
-      local sample = "/tmp/kebab-check/file.txt"
+      -- fnamemodify is the whole implementation, so prove the modifier does
+      -- what the label claims. Checking only "returned something" could never
+      -- fail -- every modifier returns the input unchanged when it does not
+      -- apply -- which exempted both copy-path entries from the sweep.
+      local saved = vim.fn.getcwd()
+      local sample = saved .. "/sub/file.txt"
       local got = vim.fn.fnamemodify(sample, how)
       if type(got) ~= "string" or got == "" then
         return false, "fnamemodify(" .. how .. ") returned nothing"
+      end
+      if how == ":p" and got:sub(1, 1) ~= "/" then
+        return false, ":p should give an absolute path, got " .. got
+      end
+      if how == ":~:." and got == sample then
+        return false, ":~:. did not shorten " .. sample
       end
       return true
     end,
@@ -221,7 +230,9 @@ local menu = {
   { name = "Cut", cmd = call("cut_to_clipboard"), rtxt = "x" },
   { name = "Paste", cmd = call("paste_from_clipboard"), rtxt = "p" },
   { name = "Copy Absolute Path", cmd = copy_path(":p"), rtxt = "gy" },
-  { name = "Copy Relative Path", cmd = copy_path(":~:."), rtxt = "Y" },
+  -- gY, not Y: LazyVim's neo-tree extra binds Y to the *absolute* path, which
+  -- is the other entry's job.
+  { name = "Copy Relative Path", cmd = copy_path(":~:."), rtxt = "gY" },
   { name = "separator" },
 
   {
@@ -253,7 +264,9 @@ local menu = {
       },
       { name = "Undo Last Commit", cmd = call("git_undo_last_commit"), rtxt = "gU" },
       { name = "separator" },
-      { name = "Stage All", cmd = call("git_add_all"), rtxt = "A" },
+      -- gA, not A: A in the filesystem tree is neo-tree's add_directory, and
+      -- this same menu advertises it for "New Folder".
+      { name = "Stage All", cmd = call("git_add_all"), rtxt = "gA" },
       { name = "Commit", cmd = call("git_commit"), rtxt = "gc" },
       { name = "Push", cmd = call("git_push"), rtxt = "gp" },
       { name = "Pull", cmd = call("git_pull"), rtxt = "gl" },
@@ -286,5 +299,17 @@ local menu = {
 -- nvzone/menu wants the plain list, so the helpers ride along as fields on it
 -- rather than changing the shape the menu consumes.
 menu.source_commands = source_commands
+
+-- The actions the tree's own key mappings need. plugins/ui.lua binds the keys
+-- this menu advertises to these, so "Revert / Discard Changes · gr" is true
+-- rather than aspirational -- `gr` was neo-tree's git_revert_file, a plain
+-- `git checkout HEAD --` that ignores untracked files, i.e. exactly the bug
+-- the menu entry exists to fix.
+-- A.tag returns the function itself, so these are directly callable.
+menu.actions = {
+  revert = revert_node,
+  copy_absolute_path = copy_path(":p"),
+  copy_relative_path = copy_path(":~:."),
+}
 
 return menu

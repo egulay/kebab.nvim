@@ -27,10 +27,29 @@ return {
           ["ga"] = "git_add_file",
           ["gu"] = "git_unstage_file",
           ["gt"] = "git_toggle_file_stage",
-          ["gr"] = "git_revert_file",
           ["gc"] = "git_commit",
           ["gp"] = "git_push",
           ["gl"] = "git_pull",
+          -- Bound here because the right-click menu advertises them, and an
+          -- advertised key that does something else is worse than none.
+          --
+          -- gr is this layer's revert, not neo-tree's git_revert_file: that
+          -- one is a plain `git checkout HEAD -- <path>`, which ignores
+          -- untracked files -- exactly the bug the menu entry exists to fix.
+          ["gr"] = function()
+            require("kebab.menus.tree").actions.revert()
+          end,
+          -- gA, not A: A is add_directory in the filesystem tree.
+          ["gA"] = "git_add_all",
+          -- gU is bound in neo-tree's git_status source only.
+          ["gU"] = "git_undo_last_commit",
+          ["gy"] = function()
+            require("kebab.menus.tree").actions.copy_absolute_path()
+          end,
+          -- gY, not Y: LazyVim binds Y to the absolute path.
+          ["gY"] = function()
+            require("kebab.menus.tree").actions.copy_relative_path()
+          end,
         },
       },
       filesystem = {
