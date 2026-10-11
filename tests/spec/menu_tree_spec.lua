@@ -79,13 +79,39 @@ end
 local flat = walk(menu, "", { leaves = {}, separators = 0 })
 
 H.describe("tree menu", function()
-  H.it("loads without neo-tree having been required first", function()
-    -- A file-scope require("neo-tree.sources.manager") used to make this module
-    -- unloadable before lazy had started the plugin. CLAUDE.md lists that trap.
-    package.loaded["kebab.menus.tree"] = nil
-    local ok, fresh = pcall(require, "kebab.menus.tree")
-    H.ok(ok, "module should load: " .. tostring(fresh))
-    H.ok(#fresh >= 20, "should still define its entries")
+  -- A file-scope require("neo-tree.sources.manager") used to make this module
+  -- unloadable before lazy had started the plugin. CLAUDE.md lists that trap.
+  --
+  -- This has to run in a *fresh process*. Clearing package.loaded and requiring
+  -- again proved nothing: this spec loads neo-tree at file scope, and
+  -- menu_behaviour_spec loads it earlier in the run, so by the time the test
+  -- ran neo-tree was on the runtimepath and the require would have succeeded
+  -- even with the trap reintroduced.
+  H.it("loads in a session where neo-tree has never been loaded", function()
+    local root = _G.KEBAB_TEST.root
+    local probe = table.concat({
+      'local ok, m = pcall(require, "kebab.menus.tree")',
+      'local n = (type(m) == "table") and #m or 0',
+      'io.write(("ok=%s entries=%d neotree=%s\\n"):format(tostring(ok), n,',
+      '  tostring(package.loaded["neo-tree"] ~= nil or package.loaded["neo-tree.sources.manager"] ~= nil)))',
+      'if not ok then io.write(tostring(m) .. "\\n") end',
+      'vim.cmd("qa!")',
+    }, "\n")
+    local res = vim.system({
+      vim.v.progpath,
+      "-n",
+      "--headless",
+      "-u",
+      "NONE",
+      "--cmd",
+      "set runtimepath+=" .. root,
+      "-c",
+      "lua " .. probe,
+    }, { text = true }):wait(60000)
+    local out = (res.stdout or "") .. (res.stderr or "")
+    H.matches("ok=true", out, "the module must load with no neo-tree: " .. out)
+    H.matches("entries=2%d", out, "and still define its entries: " .. out)
+    H.matches("neotree=false", out, "neo-tree must really not be loaded: " .. out)
   end)
 
   H.it("found the expected entries", function()

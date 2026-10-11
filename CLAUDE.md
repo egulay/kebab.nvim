@@ -477,6 +477,20 @@ Expected, as of the last full run:
 | a scratch `rust` project | `src/main.rs` | `rust-analyzer` |
 
 The tree auto-opens in all of them: `neo-tree` at column 0, the file at 33.
+`nvim <dir>` opens it too, which is a separate code path -- see the `init` trap
+above.
+
+**Reproduce it without opening a real project.** Scaffold throwaway ones and
+check those instead; this is how the table above was last confirmed:
+
+```bash
+kebab new vgo    --type go    --dir <scratch>/vgo   --module example.com/vgo --no-open
+kebab new vrust  --type rust  --dir <scratch>/vrust --no-open
+kebab new vmaven --type maven --dir <scratch>/vmaven --group com.example --no-open
+```
+
+Last full run: `jdtls,spring-boot` on the Maven project, `gopls`, and
+`rust-analyzer`, each with `neo-tree@0` and the file at column 33.
 
 Go and Rust are installed through mise (`go@1.27.2`, `rust@1.99.0`, both in
 `~/.config/mise/config.toml`), reached via `~/.local/share/mise/shims`. Scaffold
