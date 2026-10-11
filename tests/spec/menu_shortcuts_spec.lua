@@ -33,7 +33,9 @@ local BUFFER_LOCAL = {
   ["<leader>ghp"] = "gitsigns: bound on attach to a tracked file",
   ["<leader>ghS"] = "gitsigns: bound on attach to a tracked file",
   ["<leader>ghR"] = "gitsigns: bound on attach to a tracked file",
-  ["<leader>ghB"] = "gitsigns: bound on attach to a tracked file",
+  -- ghb is Blame Line, which is what the menu entry calls; ghB is Blame
+  -- Buffer, a different action the entry was advertising by mistake.
+  ["<leader>ghb"] = "gitsigns: bound on attach to a tracked file",
   ["<leader>ghd"] = "gitsigns: bound on attach to a tracked file",
   ["<leader>Fr"] = "flutter-tools: ft = dart",
   ["<leader>Fh"] = "flutter-tools: ft = dart",

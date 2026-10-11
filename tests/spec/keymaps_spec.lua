@@ -206,19 +206,36 @@ H.describe("the layer's own keys", function()
 
   H.it("do not collide with each other", function()
     -- Two specs binding the same key means one silently wins.
+    --
+    -- The spec list is read off disk rather than written here: it used to name
+    -- four files, and by then five declared keys -- sql.lua was never checked.
+    local dir = _G.KEBAB_TEST.root .. "/lua/kebab/plugins"
     local seen = {}
-    for _, name in ipairs({ "project", "menu", "git", "flutter" }) do
-      local spec = dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/" .. name .. ".lua")
-      for _, entry in ipairs(spec) do
-        for _, key in ipairs(entry.keys or {}) do
+    local files_with_keys = 0
+    for _, path in ipairs(vim.fn.glob(dir .. "/*.lua", false, true)) do
+      local name = vim.fn.fnamemodify(path, ":t:r")
+      local ok, spec = pcall(dofile, path)
+      H.ok(ok, path .. " should load: " .. tostring(spec))
+      local had_keys = false
+      for _, entry in ipairs(type(spec) == "table" and spec or {}) do
+        for _, key in ipairs(type(entry) == "table" and entry.keys or {}) do
           local lhs = type(key) == "table" and key[1] or key
-          if type(lhs) == "string" and lhs ~= "" then
+          -- `{ lhs, false }` REMOVES an inherited key rather than binding one,
+          -- so two specs disabling the same key is not a collision.
+          local removes = type(key) == "table" and key[2] == false
+          if type(lhs) == "string" and lhs ~= "" and not removes then
+            had_keys = true
             local id = lhs .. "|" .. tostring(type(key) == "table" and key.ft or "")
             H.falsy(seen[id], ("%s is bound twice (%s and %s)"):format(lhs, tostring(seen[id]), name))
             seen[id] = name
           end
         end
       end
+      if had_keys then
+        files_with_keys = files_with_keys + 1
+      end
     end
+    H.ok(files_with_keys >= 5, "expected several specs to declare keys, found " .. files_with_keys)
+    H.ok(vim.tbl_count(seen) >= 20, "and plenty of keys, found " .. vim.tbl_count(seen))
   end)
 end)

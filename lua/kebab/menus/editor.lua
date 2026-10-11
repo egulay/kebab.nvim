@@ -149,7 +149,16 @@ local code = {
 local run = {
   { name = "Run Test at Cursor", cmd = run_test("nearest", "run nearest test"), rtxt = "<leader>tr" },
   { name = "Run Tests in File", cmd = run_test("file", "run tests in file"), rtxt = "<leader>tt" },
-  { name = "Run Test...", cmd = run_test("pick", "pick a test to run"), rtxt = "<leader>tT" },
+  -- Not "Run Test..." -- the ellipsis promised a dialog, and only Java gets
+  -- one. <leader>tT is "Run All Test Files" in LazyVim's neotest keys, and in
+  -- a Java buffer jdtls owns the key and offers a picker instead (CLAUDE.md:
+  -- neotest has no Java adapter here). The name now describes what happens in
+  -- every filetype but Java, and the label says what Java does.
+  {
+    name = "Run All Tests",
+    cmd = run_test("pick", "run the whole suite; jdtls offers a picker in Java"),
+    rtxt = "<leader>tT",
+  },
   { name = "Test Summary", cmd = A.mod("neotest", "summary.toggle"), rtxt = "<leader>ts" },
   { name = "separator" },
   { name = "Toggle Breakpoint", cmd = A.mod("dap", "toggle_breakpoint"), rtxt = "<leader>db" },
@@ -197,9 +206,13 @@ local git = {
   { name = "Stage Whole File", cmd = A.mod("gitsigns", "stage_buffer"), rtxt = "<leader>ghS" },
   { name = "Revert File (discard changes)", cmd = A.mod("gitsigns", "reset_buffer"), rtxt = "<leader>ghR" },
   { name = "separator" },
-  { name = "Blame Line", cmd = A.mod("gitsigns", "blame_line", { full = true }), rtxt = "<leader>ghB" },
+  -- ghb, not ghB: ghB is gitsigns' Blame *Buffer*, a whole-file split, while
+  -- this entry is the cursor line's popup.
+  { name = "Blame Line", cmd = A.mod("gitsigns", "blame_line", { full = true }), rtxt = "<leader>ghb" },
   { name = "Diff This File", cmd = A.mod("gitsigns", "diffthis"), rtxt = "<leader>ghd" },
-  { name = "File History", cmd = A.g("Snacks", "picker.git_log_file"), rtxt = "<leader>gl" },
+  -- gf, not gl: gl is the repo-wide Git Log, this entry is the current file's
+  -- history.
+  { name = "File History", cmd = A.g("Snacks", "picker.git_log_file"), rtxt = "<leader>gf" },
   { name = "separator" },
   { name = "Diff View (working tree)", cmd = A.ex("DiffviewOpen", { plugin = "diffview.nvim" }), rtxt = "<leader>gv" },
   { name = "Diff View (file history)", cmd = A.ex("DiffviewFileHistory %", { plugin = "diffview.nvim" }), rtxt = "<leader>gV" },

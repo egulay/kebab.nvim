@@ -12,6 +12,9 @@ _G.KEBAB_TEST = { root = root, H = H }
 -- able to land in the repo.
 local sandbox = H.tmpdir("cwd")
 vim.cmd("cd " .. vim.fn.fnameescape(sandbox))
+-- H.reset_editor returns here between specs, so one that cd's elsewhere does
+-- not leave every later spec running in it.
+H.sandbox = sandbox
 
 -- lazy.nvim installs/loads asynchronously; VeryLazy is what brings in the
 -- globals the menus reference.

@@ -306,8 +306,18 @@ function H.drain(ms) vim.wait(ms or 50, function() return false end, 10) end
 ---autocmd and leaves a neo-tree window, and landing on neo-tree's buffer makes
 ---the next spec's `enew!` fail with "Buffer is not 'modifiable'". Isolating at
 ---the framework level is better than every spec remembering to tidy up.
+---The directory specs must be left in, set by tests/run.lua.
+H.sandbox = nil
+
 function H.reset_editor()
   pcall(vim.cmd, "silent! only")
+
+  -- Back to the sandbox. A spec that cd's somewhere to exercise a cwd-relative
+  -- path left every later spec running there -- and run.lua only cd's once, at
+  -- startup, so the leak was permanent.
+  if H.sandbox and vim.fn.getcwd() ~= H.sandbox then
+    pcall(vim.cmd, "cd " .. vim.fn.fnameescape(H.sandbox))
+  end
 
   -- A scratch buffer first, so wiping the others cannot leave us nowhere.
   local scratch = vim.api.nvim_create_buf(false, true)
