@@ -174,12 +174,19 @@ function M.context(template, dir, name, answers)
   local basename = vim.fn.fnamemodify(path, ":t")
   local stem = basename:gsub("%.[^.]+$", "")
   local _, marker = registry.find_project(dir)
+  -- Where the file actually *lands*, which is not the target directory when
+  -- the name carries a subdirectory: `sub/Widget` in src/main/java/com/foo
+  -- goes to com/foo/sub, and `package com.foo` would not compile there
+  -- ("the declared package does not match the expected package"). Go has the
+  -- same problem through ctx.dir, which languages/go.lua reads.
+  local landing = vim.fn.fnamemodify(path, ":h")
   return {
     path = path,
-    dir = dir,
+    dir = landing,
+    target_dir = dir,
     file = basename,
     name = stem,
-    package = M.package_for(dir),
+    package = M.package_for(landing),
     project_root = marker and vim.fn.fnamemodify(marker, ":h") or dir,
     answers = answers or {},
   }

@@ -268,6 +268,12 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- A template's **package line comes from where the file lands**, not from the
+  directory the picker was pointed at: a name carrying a subdirectory
+  (`sub/Widget`) goes to `com/foo/sub`, and `package com.foo` does not compile
+  there. `ctx.dir` is the landing directory and `ctx.target_dir` the other one;
+  `languages/go.lua` reads `ctx.dir` for the same reason. Verified with javac
+  and `go build`.
 - **`vim.fn.writefile` raises E482, and `mkdir` raises E739** -- neither
   returns a code. Every write goes through `kebab.fs.write_lines`, which
   reports instead, because a build function that throws never calls its `done`

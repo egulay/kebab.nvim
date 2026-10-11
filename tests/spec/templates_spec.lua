@@ -358,3 +358,65 @@ H.describe("a file name that tries to leave the directory", function()
     H.falsy(path:find("/./", 1, true), "got: " .. path)
   end)
 end)
+
+-- The package line came from the template's *target* directory, not from the
+-- directory the file lands in -- so a name carrying a subdirectory, which this
+-- suite explicitly blesses, produced a file that does not compile. The two
+-- nested-name tests above never ran under a source root, so neither asserted
+-- the package line: the coverage looked complete and was not.
+H.describe("the package line of a nested name", function()
+  local function template(name)
+    for _, t in ipairs(T.available({})) do
+      if t.name == name then
+        return t
+      end
+    end
+  end
+
+  local function first_line(path)
+    return vim.fn.readfile(path, "", 1)[1]
+  end
+
+  H.it("matches where a Java file actually lands", function()
+    local tpl = template("Java class")
+    H.ok(tpl, "the Java class template should be registered")
+    local root = H.tmpdir("pkg-java")
+    local dir = root .. "/proj/src/main/java/com/foo"
+    vim.fn.mkdir(dir, "p")
+    H.write(root .. "/proj/pom.xml", "<project/>")
+
+    local ok, flat = T.create(tpl, dir, "Widget", { open = false })
+    H.ok(ok, tostring(flat))
+    H.matches("^package com%.foo;", first_line(flat))
+
+    local ok2, nested = T.create(tpl, dir, "sub/Widget", { open = false })
+    H.ok(ok2, tostring(nested))
+    H.eq(dir .. "/sub/Widget.java", nested)
+    H.matches("^package com%.foo%.sub;", first_line(nested), "got: " .. first_line(nested))
+  end)
+
+  H.it("matches where a Go file actually lands", function()
+    local tpl = template("Go file")
+    H.ok(tpl)
+    local root = H.tmpdir("pkg-go")
+    vim.fn.mkdir(root .. "/inner", "p")
+    H.write(root .. "/go.mod", "module example.com/g")
+
+    local ok, flat = T.create(tpl, root, "thing", { open = false })
+    H.ok(ok, tostring(flat))
+    H.matches("^package main", first_line(flat), "a module root is package main")
+
+    local ok2, nested = T.create(tpl, root, "inner/thing", { open = false })
+    H.ok(ok2, tostring(nested))
+    H.matches("^package inner", first_line(nested), "got: " .. first_line(nested))
+  end)
+
+  H.it("still reports the target directory separately", function()
+    local tpl = template("Go file")
+    local root = H.tmpdir("pkg-ctx")
+    vim.fn.mkdir(root .. "/sub", "p")
+    local ctx = T.context(tpl, root, "sub/thing")
+    H.eq(root .. "/sub", ctx.dir, "dir is where the file lands")
+    H.eq(root, ctx.target_dir, "and target_dir is where the picker was pointed")
+  end)
+end)
