@@ -67,7 +67,7 @@ H.describe("bin/kebab", function()
     -- prompts are known -- see project_spec.
     local r = run({ "new", "x", "--bogus", "value" }, { KEBAB_DRY_RUN = "1" })
     H.eq(0, r.code, r.err)
-    H.matches('bogus = "value"', r.out)
+    H.matches('%["bogus"%] = "value"', r.out)
   end)
 
   H.it("rejects a flag that is missing its value", function()
@@ -216,9 +216,9 @@ H.describe("bin/kebab argument handling", function()
     -- a question becomes settable without touching bin/kebab. These are the
     -- prompts Go, Rust and the Node scaffold declare.
     for _, case in ipairs({
-      { { "new", "t", "--type", "go", "--module", "github.com/you/t" }, 'module = "github.com/you/t"' },
-      { { "new", "t", "--type", "rust", "--kind", "lib" }, 'kind = "lib"' },
-      { { "new", "t", "--type", "node", "--language", "javascript" }, 'language = "javascript"' },
+      { { "new", "t", "--type", "go", "--module", "github.com/you/t" }, '["module"] = "github.com/you/t"' },
+      { { "new", "t", "--type", "rust", "--kind", "lib" }, '["kind"] = "lib"' },
+      { { "new", "t", "--type", "node", "--language", "javascript" }, '["language"] = "javascript"' },
     }) do
       local line = dry(case[1])
       compiles(lua_chunk(line))
@@ -230,7 +230,7 @@ H.describe("bin/kebab argument handling", function()
     -- Lua table keys cannot contain a dash, so --my-answer sets my_answer.
     local line = dry({ "new", "t", "--type", "empty", "--my-answer", "v" })
     compiles(lua_chunk(line))
-    H.matches('my_answer = "v"', line)
+    H.matches('%["my_answer"%] = "v"', line)
   end)
 
   H.it("builds a full non-interactive `new` spec", function()
@@ -240,8 +240,8 @@ H.describe("bin/kebab argument handling", function()
     H.matches("%.new%(", line, "without --no-open it should open the editor")
     H.matches('name = "myproj"', line)
     H.matches('type = "spring"', line)
-    H.matches('group = "io%.gulay"', line)
-    H.matches('deps = "web,jpa"', line)
+    H.matches('%["group"%] = "io%.gulay"', line)
+    H.matches('%["deps"%] = "web,jpa"', line)
   end)
 
   H.it("omits the answers table when no answers were given", function()
@@ -270,7 +270,7 @@ H.describe("bin/kebab argument handling", function()
   H.it("passes --template through for vite", function()
     local line = dry({ "new", "p", "--type", "vite", "--template", "svelte-ts" })
     compiles(lua_chunk(line))
-    H.matches('template = "svelte%-ts"', line)
+    H.matches('%["template"%] = "svelte%-ts"', line)
   end)
 
   H.it("builds a spec the cli module actually accepts", function()
@@ -383,5 +383,79 @@ H.describe("bin/kebab semantic queries", function()
     H.ok(ok, "should be valid JSON: " .. tostring(json.stdout):sub(1, 200))
     H.eq(true, decoded.ok)
     H.ok(decoded.count >= 1)
+  end)
+end)
+
+-- `--timeout` is the one query flag whose value is interpolated into the
+-- generated Lua chunk unquoted, so it has to be a number or nothing: anything
+-- else either runs as Lua, or fails to compile -- and a chunk that does not
+-- compile never reaches qa!, so headless Neovim hangs with no output at all.
+H.describe("bin/kebab --timeout", function()
+  local function fails_with(args, pattern)
+    local r = run(args)
+    H.ok(r.code ~= 0, "expected a non-zero exit for " .. table.concat(args, " "))
+    H.matches(pattern, r.out .. r.err, table.concat(args, " "))
+  end
+
+  H.it("refuses a value that is not a whole number", function()
+    local marker = H.tmpdir("timeout-pwn") .. "/pwn"
+    fails_with({
+      "diagnostics",
+      "/tmp/nothing.go",
+      "--timeout",
+      ("vim.fn.writefile({'x'}, '%s')"):format(marker),
+    }, "whole number")
+    H.falsy(H.exists(marker), "the value must never be evaluated as Lua")
+
+    -- the typos that used to hang instead of erroring
+    fails_with({ "diagnostics", "/tmp/nothing.go", "--timeout", "5s" }, "whole number")
+    fails_with({ "diagnostics", "/tmp/nothing.go", "--timeout", "10_000" }, "whole number")
+    fails_with({ "diagnostics", "/tmp/nothing.go", "--timeout", "abc" }, "whole number")
+    fails_with({ "diagnostics", "/tmp/nothing.go", "--timeout", "-1" }, "whole number")
+  end)
+
+  H.it("accepts a number and carries it into the chunk", function()
+    local r = run({ "diagnostics", "/tmp/nothing.go", "--timeout", "2000" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(0, r.code, r.err)
+    H.matches("attach_timeout = 2000", r.out)
+    compiles(lua_chunk(vim.trim(r.out)))
+  end)
+end)
+
+H.describe("bin/kebab generated chunks that used to hang", function()
+  H.it("brackets an answer name that is not a Lua identifier", function()
+    -- `local` is a keyword and `2fa` starts with a digit: as bare table keys
+    -- both are syntax errors, and the command hung instead of reporting one.
+    for _, case in ipairs({
+      { { "new", "x", "--type", "maven", "--local", "repo", "--no-open" }, '%["local"%] = "repo"' },
+      { { "new", "x", "--type", "maven", "--2fa", "yes", "--no-open" }, '%["2fa"%] = "yes"' },
+      { { "new", "x", "--type", "maven", "--end", "z", "--no-open" }, '%["end"%] = "z"' },
+    }) do
+      local r = run(case[1], { KEBAB_DRY_RUN = "1" })
+      H.eq(0, r.code, r.err)
+      local line = vim.trim(r.out)
+      compiles(lua_chunk(line))
+      H.matches(case[2], line)
+    end
+  end)
+
+  H.it("does not take a leading flag as the project name", function()
+    local r = run({ "new", "--no-open", "--type", "empty", "--dir", "/tmp/zz" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(0, r.code, r.err)
+    local line = vim.trim(r.out)
+    H.falsy(line:find('name = "%-%-no%-open"'), "the flag became the project name: " .. line)
+    H.matches("create_and_quit", line, "--no-open must still take the headless branch: " .. line)
+  end)
+end)
+
+H.describe("bin/kebab KEBAB_DRY_RUN", function()
+  -- The header documents it for every command, but the query, serve and
+  -- --server paths bypassed it and really booted an editor.
+  H.it("covers the semantic queries too", function()
+    local r = run({ "diagnostics", "/tmp/nothing.go", "--json" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(0, r.code, r.err)
+    H.matches("kebab%.agent", r.out, "it should print the Lua, not run it: " .. r.out)
+    H.matches("json = true", r.out)
+    compiles(lua_chunk(vim.trim(r.out)))
   end)
 end)

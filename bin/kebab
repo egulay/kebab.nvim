@@ -128,7 +128,18 @@ parse_query_flags() {
     case "$1" in
       --json) QUERY_JSON=true; shift ;;
       --exit-code) QUERY_EXIT_CODE=true; shift ;;
-      --timeout) [ $# -ge 2 ] || die "--timeout needs a value"; QUERY_TIMEOUT=$2; shift 2 ;;
+      --timeout)
+        [ $# -ge 2 ] || die "--timeout needs a value"
+        # This value is interpolated into the Lua chunk below, so it must be a
+        # plain integer: anything else either executes as Lua or fails to
+        # compile, and a chunk that does not compile never reaches qa!, so
+        # headless Neovim hangs with no output.
+        case $2 in
+          '' | *[!0-9]*) die "--timeout needs a whole number of milliseconds, got: $2" ;;
+        esac
+        QUERY_TIMEOUT=$2
+        shift 2
+        ;;
       --) shift; while [ $# -gt 0 ]; do QUERY_ARGS+=("$1"); shift; done ;;
       -*) die "unknown option: $1" ;;
       *) QUERY_ARGS+=("$1"); shift ;;
@@ -159,9 +170,15 @@ run_remote() {
   done
   args_json="$args_json]"
 
+  if [ -n "${KEBAB_DRY_RUN:-}" ]; then
+    printf 'remote %s %s\n' "$command" "$*"
+    return 0
+  fi
+  local timeout_json=""
+  [ -n "$QUERY_TIMEOUT" ] && timeout_json=",\"attach_timeout\":$QUERY_TIMEOUT"
   local request
-  request=$(printf '{"command":"%s","args":%s,"opts":{"json":%s,"exit_code":%s}}' \
-    "$command" "$args_json" "$QUERY_JSON" "$QUERY_EXIT_CODE")
+  request=$(printf '{"command":"%s","args":%s,"opts":{"json":%s,"exit_code":%s%s}}' \
+    "$command" "$args_json" "$QUERY_JSON" "$QUERY_EXIT_CODE" "$timeout_json")
   # One round trip. The reply is the exit code on the first line, then the
   # output -- three calls to read back a number and a string was silly.
   local reply
@@ -218,8 +235,18 @@ case "$cmd" in
 
   new)
     shift
-    name=${1-}
-    [ $# -gt 0 ] && shift || true
+    # A leading value-less flag must not become the project name: `kebab new
+    # --no-open --type empty` used to scaffold a project literally called
+    # "--no-open" and then take the interactive branch anyway, because no_open
+    # was never set.
+    name=""
+    case "${1-}" in
+      -*) : ;;
+      *)
+        name=${1-}
+        [ $# -gt 0 ] && shift || true
+        ;;
+    esac
     type=""
     dir=""
     no_open=""
@@ -252,7 +279,11 @@ case "$cmd" in
       parts=""
       for k in "${!answers[@]}"; do
         [ -n "$parts" ] && parts="$parts, "
-        parts="$parts$k = $(lua_str "${answers[$k]}")"
+        # Bracket form, because a bare key has to be a Lua identifier: `local`
+        # (a keyword) or `2fa` (a leading digit) would make the chunk a syntax
+        # error, and a chunk that does not compile never reaches qa! -- so the
+        # command hangs with no output instead of reporting anything.
+        parts="$parts[$(lua_str "$k")] = $(lua_str "${answers[$k]}")"
       done
       spec="$spec, answers = { $parts }"
     fi
@@ -278,8 +309,15 @@ case "$cmd" in
       [ -n "$args_lua" ] && args_lua="$args_lua, "
       args_lua="$args_lua$(lua_str "$a")"
     done
-    "$NVIM" --headless -n \
-      -c "lua require('kebab.agent').main($(lua_str "$cmd"), { $args_lua }, $(query_opts_lua))" 2>&1
+    query_lua="lua require('kebab.agent').main($(lua_str "$cmd"), { $args_lua }, $(query_opts_lua))"
+    if [ -n "${KEBAB_DRY_RUN:-}" ]; then
+      printf '%s\n' "$query_lua"
+      exit 0
+    fi
+    # stderr is NOT folded into stdout here: a warning on the way out (an LSP
+    # client quitting, a startup notice) would prefix the --json payload and
+    # make it unparseable, which is worst exactly when the query degraded.
+    "$NVIM" --headless -n -c "$query_lua"
     exit $?
     ;;
 

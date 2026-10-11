@@ -34,6 +34,17 @@ local function timeouts(opts)
   }
 end
 
+---An argument turned into an absolute path.
+---
+---Named separately so the path handling can be tested without opening a file.
+---@param path string
+---@return string absolute
+function M.resolve_path(path)
+  -- kebab.path.expand, not vim.fn.expand: the latter runs the shell for
+  -- anything in backticks, and this path comes from a command line.
+  return vim.fn.fnamemodify(require("kebab.path").expand(path), ":p")
+end
+
 ---Open `path` and wait for a language server to attach to it.
 ---
 ---Reporting "no language server attached" rather than an empty result is the
@@ -44,7 +55,7 @@ end
 ---@return number|nil bufnr, string|nil err
 function M.open(path, opts)
   local t = timeouts(opts)
-  local full = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+  local full = M.resolve_path(path)
   if not vim.uv.fs_stat(full) then
     return nil, "no such file: " .. path
   end

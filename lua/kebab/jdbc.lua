@@ -168,7 +168,7 @@ end
 -- -------------------------------------------------------------------- paths
 
 function M.cache_dir()
-  return (vim.g.kebab_jdbc_dir and vim.fn.expand(vim.g.kebab_jdbc_dir))
+  return (vim.g.kebab_jdbc_dir and require("kebab.path").expand(vim.g.kebab_jdbc_dir))
     or (vim.fn.stdpath("data") .. "/kebab/jdbc")
 end
 
@@ -839,7 +839,7 @@ function M.build_url(driver, parts)
   url = put(url, "{host}", parts.host or "localhost")
   url = put(url, "{port}", tostring(parts.port or driver.default_port or ""))
   url = put(url, "{database}", parts.database or "")
-  url = put(url, "{file}", parts.file and vim.fn.expand(parts.file) or "")
+  url = put(url, "{file}", parts.file and require("kebab.path").expand(parts.file) or "")
   return url
 end
 

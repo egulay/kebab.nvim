@@ -64,7 +64,7 @@ function M.discover()
   local found = {}
   local seen = {}
   for _, root in ipairs(M.roots()) do
-    local path = vim.fn.expand(root)
+    local path = require("kebab.path").expand(root)
     local fd = uv.fs_scandir(path)
     if fd then
       while true do
@@ -188,7 +188,7 @@ function M.create(spec, done)
     return done(false, err)
   end
 
-  local dest = vim.fn.expand(spec.dest or (vim.fn.expand("~/Projects") .. "/" .. name))
+  local dest = require("kebab.path").expand(spec.dest or (vim.fn.expand("~/Projects") .. "/" .. name))
   if uv.fs_stat(dest) and #vim.fn.readdir(dest) > 0 then
     local err = "Directory exists and is not empty: " .. dest
     vim.notify(err, vim.log.levels.ERROR)
@@ -302,7 +302,12 @@ function M.new_project()
       }, function(dest)
         if not dest or dest == "" then return end
         ask(type_def, function(answers)
-          M.create({ type = type_def.key, name = name, dest = vim.fn.expand(dest), answers = answers })
+          M.create({
+            type = type_def.key,
+            name = name,
+            dest = require("kebab.path").expand(dest),
+            answers = answers,
+          })
         end)
       end)
     end)

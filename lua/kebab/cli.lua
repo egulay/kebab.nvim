@@ -49,7 +49,7 @@ function M.open(query)
 
   -- A path the user can see wins over a name lookup: `kebab open ./thing`
   -- should never open some unrelated project called "thing".
-  local expanded = vim.fn.expand(query)
+  local expanded = require("kebab.path").expand(query)
   local stat = vim.uv.fs_stat(expanded)
   if stat then
     if stat.type == "directory" then
@@ -489,7 +489,7 @@ function M.doctor()
   local roots = project.roots()
   local existing = {}
   for _, r in ipairs(roots) do
-    local path = vim.fn.expand(r)
+    local path = require("kebab.path").expand(r)
     if vim.uv.fs_stat(path) then
       existing[#existing + 1] = path
     end

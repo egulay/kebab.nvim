@@ -14,7 +14,7 @@ local registry = require("kebab.registry")
 ---Where scratch files live. Under stdpath("data") rather than in the project,
 ---so they are never committed by accident.
 function M.dir()
-  return (vim.g.kebab_scratch_dir and vim.fn.expand(vim.g.kebab_scratch_dir))
+  return (vim.g.kebab_scratch_dir and require("kebab.path").expand(vim.g.kebab_scratch_dir))
     or (vim.fn.stdpath("data") .. "/kebab/scratch")
 end
 

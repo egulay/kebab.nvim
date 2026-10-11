@@ -14,7 +14,7 @@ local M = {}
 local jdbc = require("kebab.jdbc")
 
 function M.store_path()
-  return (vim.g.kebab_db_store and vim.fn.expand(vim.g.kebab_db_store))
+  return (vim.g.kebab_db_store and require("kebab.path").expand(vim.g.kebab_db_store))
     or (vim.fn.stdpath("data") .. "/kebab/connections.json")
 end
 
