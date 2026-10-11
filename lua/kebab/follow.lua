@@ -590,9 +590,12 @@ function M.setup()
   local group = vim.api.nvim_create_augroup("kebab_follow", { clear = true })
 
   -- Stopping on exit matters: an inotify watch with a dead callback is a leak.
-  vim.api.nvim_create_autocmd("VimLeavePre", {
+  vim.api.nvim_create_autocmd({ "VimLeavePre", "VimLeave", "QuitPre" }, {
     group = group,
     callback = function()
+      -- Set first: a scheduled autostart must not start a watcher on the way
+      -- out, because nothing will stop it.
+      STATE.shutting_down = true
       pcall(M.stop)
     end,
   })
@@ -612,6 +615,22 @@ function M.setup()
   -- that init happened to run before the one setting the flag.
   local function autostart()
     if vim.g.kebab_follow_autostart == false or M.running() or STATE.suppress_autostart then
+      return
+    end
+    -- Never while the editor is going away. autostart is scheduled, so for a
+    -- short-lived session -- `nvim -c qa`, or the editor `git commit` opens --
+    -- it can land at or after VimLeavePre, and the watcher it starts then is
+    -- never stopped: one orphaned inotifywait per invocation. Measured: one
+    -- leak from a single `nvim -n --headless -c qa`.
+    if STATE.shutting_down or vim.v.exiting ~= vim.NIL then
+      return
+    end
+    -- Nor for a buffer that is not a project file. `git commit` and
+    -- `git rebase -i` open an editor in the repository, and following their
+    -- buffer is both pointless and a watcher nobody asked for. Same list
+    -- explorer.lua uses.
+    local ft = vim.bo[vim.api.nvim_get_current_buf()].filetype
+    if ft == "gitcommit" or ft == "gitrebase" or ft == "help" or ft == "man" then
       return
     end
     -- Once per tree. BufEnter fires constantly, and `M.running()` alone was

@@ -390,6 +390,14 @@ client attached, file contents reverted.
 - A debounce set keyed by path **loses arrival order**: `follow`'s "latest" and
   "first" were both `table.sort` plus an end, i.e. alphabetical -- effectively
   swapping the two modes. `STATE.pending[path]` holds a sequence number now.
+- **Autostart must refuse while the editor is exiting.** It is scheduled, so in
+  a short-lived session -- `nvim -c qa`, or the editor `git commit` opens -- it
+  lands at or after `VimLeavePre` and the watcher it starts is never stopped.
+  Measured: one orphaned `inotifywait` per invocation, which for `git commit`
+  is one per commit. Guarded by a `shutting_down` flag set on
+  VimLeavePre/VimLeave/QuitPre *before* the stop, and by `vim.v.exiting`. It
+  also skips a `gitcommit`/`gitrebase`/`help`/`man` buffer, which is not a
+  session worth following.
 - **Ghost Mode ships ON**: `kebab_follow_autostart` defaults to on and
   `open_new` to true, because needing a keypress is how the feature ends up
   looking dead. `= false` turns each off. `tests/run.lua` pins autostart off

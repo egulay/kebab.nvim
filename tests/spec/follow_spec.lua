@@ -530,3 +530,68 @@ H.describe("watching more than one project", function()
     H.ok(ok, tostring(err))
   end)
 end)
+
+-- autostart is scheduled, so in a short-lived session it can land at or after
+-- VimLeavePre -- and the watcher it starts then is never stopped. One orphaned
+-- inotifywait per invocation, and `git commit` opens an editor in the repo, so
+-- that would be one per commit.
+H.describe("not starting on the way out", function()
+  local function watchers_on(path)
+    local out = vim.system({
+      "sh",
+      "-c",
+      ("for p in $(pgrep -x inotifywait); do tr '\\\\0' ' ' < /proc/$p/cmdline 2>/dev/null | grep -q %s && echo x; done | wc -l"):format(
+        vim.fn.shellescape(path)
+      ),
+    }, { text = true }):wait(30000)
+    return tonumber(vim.trim(out.stdout or "0")) or 0
+  end
+
+  H.it("leaves nothing behind after a one-shot nvim", function()
+    if vim.fn.executable("inotifywait") == 0 or vim.fn.executable("pgrep") == 0 then
+      H.skip("inotify-tools and pgrep are needed")
+    end
+    local dir = H.tmpdir("oneshot")
+    H.write(dir .. "/a.txt", "x")
+    H.eq(0, watchers_on(dir), "the fixture should start clean")
+
+    -- exactly the shape that leaked: autostart on, and the editor quits at once
+    for _ = 1, 3 do
+      vim.system({
+        vim.v.progpath,
+        "-n",
+        "--headless",
+        "--cmd",
+        "set runtimepath+=" .. _G.KEBAB_TEST.root,
+        "--cmd",
+        "lua vim.g.kebab_follow_autostart = true",
+        "-c",
+        "lua require('kebab.follow').setup()",
+        "-c",
+        "qa",
+      }, { cwd = dir, text = true }):wait(60000)
+    end
+    vim.wait(2000, function()
+      return false
+    end, 100)
+    H.eq(0, watchers_on(dir), "a session that quits at once must not leave a watcher")
+  end)
+
+  H.it("does not start for a git editor buffer", function()
+    local saved = vim.g.kebab_follow_autostart
+    vim.g.kebab_follow_autostart = true
+    F.allow_autostart()
+    local ok, err = pcall(function()
+      vim.cmd("enew")
+      vim.bo.filetype = "gitcommit"
+      vim.api.nvim_exec_autocmds("BufEnter", { modeline = false })
+      H.drain(400)
+      H.falsy(F.running(), "`git commit` opens an editor in the repo; it is not a session to follow")
+    end)
+    vim.g.kebab_follow_autostart = saved
+    pcall(F.stop)
+    F.allow_autostart()
+    H.reset_editor()
+    H.ok(ok, tostring(err))
+  end)
+end)
