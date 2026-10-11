@@ -241,7 +241,13 @@ function M.resolve(coord)
       local name, typ = vim.uv.fs_scandir_next(fd)
       if not name then break end
       if typ == "directory" and vim.uv.fs_stat(M.jar_path(group, artifact, name)) then
-        newest = name
+        -- Compare: readdir order is filesystem-dependent, so taking the last
+        -- entry can pin an old driver for the whole session -- and once it is
+        -- memoized, M.installed() reports success and no network lookup ever
+        -- corrects it.
+        if newest == nil or M.version_lt(newest, name) then
+          newest = name
+        end
       end
     end
     if newest then
@@ -255,6 +261,54 @@ function M.resolve(coord)
   end
   resolved[coord] = { group = group, artifact = artifact, version = latest }
   return resolved[coord]
+end
+
+---A timeout in words, so a sub-second one does not read as "0s".
+---@param ms number
+function M.describe_timeout(ms)
+  if ms < 1000 then
+    return ("%dms"):format(ms)
+  end
+  return ("%gs"):format(ms / 1000)
+end
+
+---Is version `a` older than version `b`?
+---
+---Numeric segments compare as numbers (so 9.4.1212 < 42.6.0, which a string
+---comparison gets backwards), and a version with a pre-release suffix sorts
+---below the same version without one.
+---@param a string
+---@param b string
+function M.version_lt(a, b)
+  local function parts(v)
+    local out = {}
+    for chunk in tostring(v):gmatch("[^%.%-%+_]+") do
+      out[#out + 1] = tonumber(chunk) or chunk
+    end
+    return out
+  end
+  local pa, pb = parts(a), parts(b)
+  for i = 1, math.max(#pa, #pb) do
+    local x, y = pa[i], pb[i]
+    if x == nil then
+      -- 2.0 vs 2.0.1 -> shorter is older; 2.0 vs 2.0-rc1 -> the suffix is older
+      return type(y) == "number"
+    end
+    if y == nil then
+      return type(x) ~= "number"
+    end
+    if x ~= y then
+      if type(x) == "number" and type(y) == "number" then
+        return x < y
+      end
+      -- a number outranks a word: 2.1 is newer than 2.0-rc
+      if type(x) ~= type(y) then
+        return type(x) ~= "number"
+      end
+      return tostring(x) < tostring(y)
+    end
+  end
+  return false
 end
 
 ---Download one jar if it is not cached. Returns path, err.
@@ -574,10 +628,13 @@ function M.shutdown(url)
       end
     end)
   end
+  -- Signal, but do *not* close the process handle here: closing it in the same
+  -- tick drops the pid from libuv's queue before SIGCHLD arrives, so the child
+  -- is never waitpid'd and stays <defunct> for the life of the session. The
+  -- exit callback closes it, once the child has actually been reaped.
   pcall(function()
     if d.handle and not d.handle:is_closing() then
       d.handle:kill("sigterm")
-      d.handle:close()
     end
   end)
   return true
@@ -618,7 +675,11 @@ local function start_daemon(url)
     stdio = { stdin, stdout, stderr },
     env = env,
   }, function(code)
-    -- The process died; nobody should be left waiting on it.
+    -- The process died; nobody should be left waiting on it, and nothing it
+    -- owned should be left open. A serve-mode JVM exits by itself whenever the
+    -- connection fails, so this runs on every failed ping -- leaking its three
+    -- pipes and the process handle each time walks a long session toward
+    -- EMFILE, and GC cannot reclaim a libuv handle.
     vim.schedule(function()
       if daemons[url] == d then
         daemons[url] = nil
@@ -626,6 +687,16 @@ local function start_daemon(url)
       while #d.queue > 0 do
         deliver(d, false, ("the JDBC process exited (%s)%s"):format(
           tostring(code), d.stderr_text ~= "" and ("\n" .. d.stderr_text) or ""))
+      end
+      for _, h in ipairs({ d.stdout, d.stderr, d.stdin, d.handle }) do
+        pcall(function()
+          if h and not h:is_closing() then
+            if h == d.stdout or h == d.stderr then
+              pcall(function() h:read_stop() end)
+            end
+            h:close()
+          end
+        end)
       end
     end)
   end)
@@ -659,14 +730,20 @@ local function start_daemon(url)
 end
 
 ---Send one request to the warm process and wait for its answer.
----@return boolean|nil ok, string body_or_err
+---
+---The third return value is what makes a one-shot retry safe: it is true only
+---while nothing has been handed to the process yet. Once the frame is written,
+---the server may have executed it -- so a timeout must never be retried, or a
+---DELETE that committed server-side runs a second time.
+---@return boolean|nil ok, string body_or_err, boolean retryable
 local function request(url, mode, arg, payload, timeout)
   local d = daemons[url]
   if not d then
     local err
     d, err = start_daemon(url)
     if not d then
-      return nil, err
+      -- nothing was sent: the warm process could not be started at all
+      return nil, err, true
     end
   end
 
@@ -681,17 +758,22 @@ local function request(url, mode, arg, payload, timeout)
     d.stdin:write(header .. payload)
   end)
   if not wrote then
+    -- The pipe was already broken, so the frame never went anywhere.
     M.shutdown(url)
-    return nil, "could not write to the JDBC process"
+    return nil, "could not write to the JDBC process", true
   end
 
-  if not vim.wait(timeout or 120000, function() return done end, 10) then
+  local ok, reason = vim.wait(timeout or 120000, function() return done end, 10)
+  if not ok then
     -- A hung query leaves the stream mid-frame, so the process cannot be
     -- trusted for the next request.
     M.shutdown(url)
-    return nil, "the JDBC process did not answer in time"
+    local why = reason == -2 and "the JDBC request was interrupted"
+      or ("the JDBC process did not answer within %s"):format(M.describe_timeout(timeout or 120000))
+    -- Not retryable: the statement may already have run and committed.
+    return nil, why .. " (it may already have run; check before repeating it)", false
   end
-  return result_ok, result_body
+  return result_ok, result_body, false
 end
 
 ---Run a mode, reusing a warm process where possible.
@@ -709,10 +791,16 @@ function M.run(url, mode, opts)
     return M.run_oneshot(url, mode, opts)
   end
 
-  local ok, body = request(url, mode, (opts.args or {})[1], opts.stdin, opts.timeout)
+  local ok, body, retryable = request(url, mode, (opts.args or {})[1], opts.stdin, opts.timeout)
   if ok == nil then
-    -- The warm process could not be used at all. Fall back rather than fail:
-    -- a one-shot run is slow but correct.
+    if not retryable then
+      -- The request reached the process. Re-running it could apply a mutating
+      -- statement twice, and would spend the timeout budget a second time, so
+      -- report what happened instead.
+      return nil, vim.trim(body or "the JDBC process failed")
+    end
+    -- The warm process could not be used at all, and nothing was sent. Fall
+    -- back rather than fail: a one-shot run is slow but correct.
     return M.run_oneshot(url, mode, opts)
   end
   if not ok then
@@ -738,11 +826,20 @@ end
 ---@param parts table { host?, port?, database?, file? }
 function M.build_url(driver, parts)
   parts = parts or {}
+  -- Substitute through a function, not a replacement string: gsub treats `%`
+  -- in a replacement as an escape, so a path like /tmp/100%/shop.sqlite would
+  -- silently lose a character or pick up a capture reference, and the saved
+  -- connection would point somewhere else entirely.
+  local function put(url, placeholder, value)
+    return (url:gsub(placeholder, function()
+      return value
+    end))
+  end
   local url = driver.url
-  url = url:gsub("{host}", parts.host or "localhost")
-  url = url:gsub("{port}", tostring(parts.port or driver.default_port or ""))
-  url = url:gsub("{database}", parts.database or "")
-  url = url:gsub("{file}", parts.file and vim.fn.expand(parts.file) or "")
+  url = put(url, "{host}", parts.host or "localhost")
+  url = put(url, "{port}", tostring(parts.port or driver.default_port or ""))
+  url = put(url, "{database}", parts.database or "")
+  url = put(url, "{file}", parts.file and vim.fn.expand(parts.file) or "")
   return url
 end
 

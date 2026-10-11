@@ -498,3 +498,108 @@ H.describe("the warm JDBC process", function()
     H.matches("No driver registered", err)
   end)
 end)
+
+H.describe("picking a cached driver version", function()
+  H.it("compares versions numerically, not as strings", function()
+    H.ok(J.version_lt("9.4.1212", "42.6.0"), "42.6.0 is newer, though it sorts lower as a string")
+    H.falsy(J.version_lt("42.6.0", "9.4.1212"))
+    H.ok(J.version_lt("2.0", "2.0.1"))
+    H.falsy(J.version_lt("2.0.1", "2.0"))
+    H.ok(J.version_lt("2.0-rc1", "2.0"), "a pre-release is older than the release")
+    H.falsy(J.version_lt("2.0", "2.0-rc1"))
+    H.falsy(J.version_lt("1.2.3", "1.2.3"))
+    H.ok(J.version_lt("2.2.224", "2.3.0"))
+  end)
+
+  H.it("takes the newest jar on disk, whatever order readdir gives", function()
+    local cache = H.tmpdir("jdbc-cache")
+    local saved = vim.g.kebab_jdbc_dir
+    vim.g.kebab_jdbc_dir = cache
+    -- two cached versions of one driver, the older one created last. A unique
+    -- coordinate keeps resolve()'s memo table out of it, and because both are
+    -- cached no network lookup is needed.
+    for _, v in ipairs({ "42.6.0", "9.4.1212" }) do
+      local dir = ("%s/jars/io/example/fakedriver/%s"):format(cache, v)
+      vim.fn.mkdir(dir, "p")
+      vim.fn.writefile({ "" }, ("%s/fakedriver-%s.jar"):format(dir, v))
+    end
+    local spec, err = J.resolve("io.example:fakedriver")
+    vim.g.kebab_jdbc_dir = saved
+    H.ok(spec, tostring(err))
+    H.eq("42.6.0", spec.version, "an old driver would fail to authenticate against a modern server")
+  end)
+end)
+
+H.describe("building a JDBC url", function()
+  -- gsub treats % in a replacement string as an escape, so an unescaped
+  -- substitution silently rewrites the path.
+  H.it("keeps a percent sign in a path or database name", function()
+    H.eq(
+      "jdbc:sqlite:/tmp/100%/shop.sqlite",
+      J.build_url({ url = "jdbc:sqlite:{file}" }, { file = "/tmp/100%/shop.sqlite" })
+    )
+    H.eq(
+      "jdbc:postgresql://h:5432/a%1b",
+      J.build_url(
+        { url = "jdbc:postgresql://{host}:{port}/{database}", default_port = 5432 },
+        { host = "h", database = "a%1b" }
+      )
+    )
+  end)
+end)
+
+-- A timeout used to fall through to a one-shot run of the *same* payload, so a
+-- statement the server had already executed was applied a second time and the
+-- caller was told it succeeded.
+H.describe("a request that times out", function()
+  local function requires_jdbc()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 then
+      H.skip("a JDK is needed for JDBC")
+    end
+    if vim.fn.executable("sqlite3") == 0 then
+      H.skip("sqlite3 is needed to build the fixture")
+    end
+  end
+
+  H.it("is reported, and never re-runs the statement", function()
+    requires_jdbc()
+    local db = H.tmpdir("jdbc-timeout") .. "/t.sqlite"
+    local res = vim.system({ "sqlite3", db }, {
+      stdin = "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);",
+      text = true,
+    }):wait(30000)
+    H.eq(0, res.code, "fixture creation failed")
+    local url = "jdbc:sqlite:" .. db
+
+    -- warm it first, so the next frame really does reach a live JVM
+    local ok, err = J.run(url, "query", { stdin = "select 1", timeout = 120000 })
+    H.ok(ok, tostring(err))
+
+    local lines, run_err = J.run(url, "query", { stdin = "insert into t (v) values ('x')", timeout = 1 })
+    H.falsy(lines, "a timeout is a failure, not a success")
+    H.matches("did not answer", run_err)
+    H.matches("may already have run", run_err, "the user has to be told it might have been applied")
+
+    -- give the warm process time to finish and commit before counting
+    vim.wait(4000, function() return false end, 100)
+    local count = vim.trim(vim.fn.system({ "sqlite3", db, "select count(*) from t where v='x'" }))
+    H.ok(count == "0" or count == "1", "the insert must not be applied twice, got " .. count)
+    J.shutdown(url)
+  end)
+
+  H.it("still falls back when the warm process never started", function()
+    requires_jdbc()
+    -- nothing was sent, so a one-shot retry is safe and must still happen
+    local saved = vim.g.kebab_jdbc_daemon
+    vim.g.kebab_jdbc_daemon = false
+    local lines, err = J.run("jdbc:sqlite::memory:", "query", { stdin = "select 1", timeout = 60000 })
+    vim.g.kebab_jdbc_daemon = saved
+    H.ok(lines, "the one-shot path is still the fallback: " .. tostring(err))
+  end)
+
+  H.it("spells a sub-second timeout in milliseconds", function()
+    H.eq("1ms", J.describe_timeout(1))
+    H.eq("300s", J.describe_timeout(300000))
+    H.eq("1.5s", J.describe_timeout(1500))
+  end)
+end)
