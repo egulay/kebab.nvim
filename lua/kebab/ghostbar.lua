@@ -1,9 +1,12 @@
 -- The Ghost Mode indicator.
 --
--- While :IdeFollow is on, something else is editing your files and the cursor
--- moves on its own. That needs to be visible without being asked for -- so a
--- small animated panel appears by itself in the bottom-right corner, says
--- which file is being touched, and goes away when following stops.
+-- An *activity* light, not a status light. It appears because something else
+-- has just touched the project -- an agent writing a file -- names that file,
+-- and goes away again once things have been quiet for a few seconds.
+--
+-- It is deliberately not shown merely because following is armed. A badge that
+-- sits there permanently says nothing about whether an agent is doing
+-- anything, which is the only question it exists to answer.
 --
 -- It is deliberately inert: not focusable, no mappings, no autocmds of its
 -- own on the editor's buffers. Closing the window by hand is allowed and the
@@ -32,6 +35,9 @@ function M.config()
     interval_ms = 120,
     -- how long a filename stays on the panel after it was followed
     activity_ms = 2500,
+    -- how long the panel stays up after the last change. Past this it hides
+    -- itself: nothing is happening, so there is nothing to report.
+    idle_ms = 5000,
     title = "Ghost Mode",
   }
   if type(g) == "table" then
@@ -152,6 +158,11 @@ function M.show()
       if not require("kebab.follow").running() then
         return M.hide()
       end
+      -- Quiet for long enough: nothing is happening, so stop saying anything.
+      local idle = cfg.idle_ms or 5000
+      if idle > 0 and STATE.activity_at > 0 and (vim.uv.now() - STATE.activity_at) >= idle then
+        return M.hide()
+      end
       STATE.frame = STATE.frame + 1
       M.render()
     end)
@@ -166,6 +177,15 @@ function M.hide()
   if visible() then
     pcall(vim.api.nvim_win_close, STATE.win, true)
   end
+  -- Blank the buffer too, so state().text reports what is on screen rather
+  -- than whatever was last on it.
+  if STATE.buf and vim.api.nvim_buf_is_valid(STATE.buf) then
+    pcall(function()
+      vim.bo[STATE.buf].modifiable = true
+      vim.api.nvim_buf_set_lines(STATE.buf, 0, -1, false, { "" })
+      vim.bo[STATE.buf].modifiable = false
+    end)
+  end
   STATE.win = nil
   STATE.activity = nil
   STATE.count = 0
@@ -175,11 +195,17 @@ end
 
 ---Note that `path` was just followed, so the panel can name it.
 ---@param path string
+---Note that `path` was just touched by something outside the editor.
+---
+---This is what puts the panel on screen. Following being armed does not.
+---@param path string
 function M.activity(path)
   STATE.count = STATE.count + 1
   STATE.activity = vim.fn.fnamemodify(path, ":t")
   STATE.activity_at = vim.uv.now()
-  if visible() then
+  if not STATE.active then
+    M.show()
+  elseif visible() then
     M.render()
   end
   return STATE.activity

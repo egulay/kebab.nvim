@@ -371,8 +371,10 @@ either side. `:IdeFollowStatus` reports what it has been doing.
 
 ### The Ghost Mode indicator
 
-While following is on, a small animated panel appears by itself in the
-bottom-right corner:
+It is an **activity** light, not a status light: it appears *because* something
+outside the editor has just touched the project, and hides itself again once
+things have been quiet for a few seconds. Opening a project no agent is working
+in shows nothing at all.
 
 ```
                                               ╭──────────────────────────────╮
@@ -380,11 +382,13 @@ bottom-right corner:
                                               ╰──────────────────────────────╯
 ```
 
-The ghost drifts while it waits, names each file as it is followed, and falls
-back to a running change count once that name is a couple of seconds old. It is
-not focusable and has no mappings — it cannot take your cursor. It appears when
-following starts and goes away when it stops, including when following stops on
-its own.
+The ghost drifts while the agent works, names each file as it is followed, and
+falls back to a running change count once that name is a couple of seconds old.
+It is not focusable and has no mappings — it cannot take your cursor.
+
+```lua
+vim.g.kebab_follow_indicator = { idle_ms = 5000 }  -- how long it lingers
+```
 
 ### It is on already
 

@@ -156,22 +156,77 @@ H.describe("the Ghost Mode panel", function()
   end)
 end)
 
-H.describe("follow turns the panel on and off by itself", function()
-  H.it("shows it on start and hides it on stop", function()
+-- The panel is an *activity* light, not a status light: it appears because
+-- something touched the project, and hides again once things are quiet. A
+-- badge that sits there permanently says nothing about whether an agent is
+-- doing anything, which is the only question it answers.
+H.describe("the panel reports activity, not readiness", function()
+  H.it("stays hidden while following is merely armed", function()
     if vim.fn.executable("inotifywait") == 0 then
       H.skip("inotify-tools is needed to start a watcher")
     end
-    -- Pinned to the shipped default: a config that turns the panel off is a
-    -- legitimate setting, and this test is about follow wiring it up, not
-    -- about whether this machine wants it.
     local saved = vim.g.kebab_follow_indicator
     vim.g.kebab_follow_indicator = nil
     local ran, err = pcall(function()
-      local ok, serr = F.start(H.tmpdir("ghost-follow"))
+      local ok, serr = F.start(H.tmpdir("armed"))
       H.ok(ok, tostring(serr))
-      H.ok(G.state().showing, "the indicator should appear without being asked for")
+      H.drain(400)
+      H.falsy(G.state().showing, "nothing has happened, so there is nothing to show")
+      H.eq("", G.state().text, "and no text either")
+    end)
+    pcall(F.stop)
+    vim.g.kebab_follow_indicator = saved
+    H.ok(ran, tostring(err))
+  end)
+
+  H.it("appears when something touches the project, naming the file", function()
+    pretending(true, function()
+      H.falsy(G.state().showing)
+      G.activity("/p/src/Thing.java")
+      H.ok(G.state().showing, "an agent touching a file is what puts it on screen")
+      H.matches("Thing%.java", G.state().text)
+      G.hide()
+    end)
+  end)
+
+  H.it("hides itself once things have been quiet", function()
+    pretending(true, function()
+      -- an idle window of 1ms, so it is stale immediately
+      vim.g.kebab_follow_indicator = { idle_ms = 1 }
+      G.activity("/p/src/Thing.java")
+      H.ok(G.state().showing, "it should be up at first")
+      H.wait(5000, function()
+        return not G.state().showing
+      end, "the panel should hide itself when nothing is happening")
+    end)
+  end)
+
+  H.it("comes back for the next change", function()
+    pretending(true, function()
+      vim.g.kebab_follow_indicator = { idle_ms = 1 }
+      G.activity("/p/one.go")
+      H.wait(5000, function()
+        return not G.state().showing
+      end, "it should go quiet first")
+      G.activity("/p/two.go")
+      H.ok(G.state().showing, "a new change must bring it back")
+      H.matches("two%.go", G.state().text)
+      G.hide()
+    end)
+  end)
+
+  H.it("goes away when following stops", function()
+    if vim.fn.executable("inotifywait") == 0 then
+      H.skip("inotify-tools is needed to start a watcher")
+    end
+    local saved = vim.g.kebab_follow_indicator
+    vim.g.kebab_follow_indicator = nil
+    local ran, err = pcall(function()
+      H.ok(F.start(H.tmpdir("ghost-stop")))
+      G.activity("/p/something.go")
+      H.ok(G.state().showing, "showing because something happened")
       H.ok(F.stop())
-      H.falsy(G.state().showing, "and go away when following stops")
+      H.falsy(G.state().showing, "and gone once following stops")
       H.falsy(G.state().animating)
     end)
     pcall(F.stop)

@@ -469,12 +469,11 @@ function M.start(root)
   STATE.roots = roots
   STATE.root = roots[1]
   STATE.count = 0
-  -- Something else is about to move the cursor on its own, so say so without
-  -- being asked. Optional on purpose: a broken indicator must not stop
-  -- following from working.
-  pcall(function()
-    require("kebab.ghostbar").show()
-  end)
+  -- The badge is NOT shown here. It is an activity light: it appears when
+  -- something actually touches the project (see ghostbar.activity, called from
+  -- flush) and hides again when things go quiet. Showing it merely because
+  -- watching is armed told you nothing about whether an agent was doing
+  -- anything, which is the only question it answers.
   if #failed > 0 then
     -- Partial is still useful; say which root is not covered.
     vim.notify(("Follow: could not watch %s"):format(table.concat(failed, ", ")), vim.log.levels.WARN)

@@ -398,6 +398,13 @@ client attached, file contents reverted.
   VimLeavePre/VimLeave/QuitPre *before* the stop, and by `vim.v.exiting`. It
   also skips a `gitcommit`/`gitrebase`/`help`/`man` buffer, which is not a
   session worth following.
+- **The badge is an activity light, not a status light.** It appears from
+  `ghostbar.activity()` -- i.e. because something touched the project -- and
+  hides itself after `idle_ms` (5s) of quiet. `follow.start()` must NOT show
+  it: a badge that sits there whenever watching is armed says nothing about
+  whether an agent is doing anything, which is the only question it answers.
+  This was built the wrong way round first and reported as "it says ghost mode
+  but none of the agent touches that project".
 - **Ghost Mode ships ON**: `kebab_follow_autostart` defaults to on and
   `open_new` to true, because needing a keypress is how the feature ends up
   looking dead. `= false` turns each off. `tests/run.lua` pins autostart off
