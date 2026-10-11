@@ -125,8 +125,12 @@ return {
       file = ".gitignore",
       kinds = { "gradle" },
       lines = {
-        "build/", ".gradle/", "!gradle/wrapper/gradle-wrapper.jar",
+        -- the negation has to come AFTER *.jar: git applies the last
+        -- matching pattern, so with it first the wrapper jar stays ignored
+        -- and ./gradlew fails on a fresh clone
+        "build/", ".gradle/",
         "*.class", "*.jar", "out/",
+        "!gradle/wrapper/gradle-wrapper.jar",
         "", "# IDE", ".idea/", "*.iml",
         "", "# local config", ".env",
       },

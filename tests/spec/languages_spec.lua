@@ -414,3 +414,150 @@ H.describe("JavaScript as well as TypeScript", function()
     end
   end)
 end)
+
+-- Each of these produced a file that the real toolchain rejects, which is a
+-- class of bug the suite could not see while it only checked that a template
+-- rendered *something*.
+H.describe("generated files the toolchain has to accept", function()
+  local reg = require("kebab.registry")
+  local S = require("kebab.scaffold")
+
+  local function project_file(file, kind)
+    for _, pf in ipairs(reg.collect("project_files")) do
+      if pf.file == file and vim.tbl_contains(pf.kinds or {}, kind) then
+        return pf
+      end
+    end
+  end
+
+  H.it("puts a .gitignore negation after the pattern it negates", function()
+    -- git applies the LAST matching pattern, so `!wrapper.jar` before `*.jar`
+    -- leaves the wrapper ignored and ./mvnw fails on a fresh clone.
+    for _, case in ipairs({
+      { kind = "maven", keep = "!.mvn/wrapper/maven-wrapper.jar" },
+      { kind = "gradle", keep = "!gradle/wrapper/gradle-wrapper.jar" },
+    }) do
+      local pf = project_file(".gitignore", case.kind)
+      H.ok(pf, case.kind .. " should generate a .gitignore")
+      local lines = type(pf.lines) == "function" and pf.lines({ kind = case.kind }) or pf.lines
+      local jar_at, keep_at
+      for i, l in ipairs(lines) do
+        if l == "*.jar" then
+          jar_at = i
+        end
+        if l == case.keep then
+          keep_at = i
+        end
+      end
+      if keep_at then
+        H.ok(jar_at, "*.jar should be there too for " .. case.kind)
+        H.ok(keep_at > jar_at, ("%s: %s (line %d) must come after *.jar (line %d)"):format(
+          case.kind, case.keep, keep_at, jar_at
+        ))
+      end
+    end
+  end)
+
+  H.it("names the Rust container binary after the crate, not the directory", function()
+    local pf = project_file("Dockerfile", "rust")
+    H.ok(pf, "rust should generate a Dockerfile")
+    local lines = pf.render({ project = "my-crate", kind = "rust" })
+    local copy
+    for _, l in ipairs(lines) do
+      if l:find("target/release") then
+        copy = l
+      end
+    end
+    H.ok(copy, "there should be a COPY of the release binary")
+    -- the scaffold runs `cargo new --name <snake>`, so the artifact is snake
+    H.matches("release/my_crate%s", copy, "cargo builds target/release/my_crate: " .. copy)
+  end)
+
+  H.it("writes a Go package clause that is an identifier", function()
+    local dir = H.tmpdir("go-pkg")
+    vim.fn.mkdir(dir .. "/my-tool/store", "p")
+    H.write(dir .. "/my-tool/go.mod", "module example.com/my-tool\n\ngo 1.21")
+    H.eq("main", S.go_package(dir .. "/my-tool"), "a module root is package main")
+    H.eq("store", S.go_package(dir .. "/my-tool/store"))
+    vim.fn.mkdir(dir .. "/2fast", "p")
+    H.eq("pkg_2fast", S.go_package(dir .. "/2fast"), "an identifier cannot start with a digit")
+    vim.fn.mkdir(dir .. "/my-tool-x", "p")
+    H.eq("my_tool_x", S.go_package(dir .. "/my-tool-x"), "a hyphen is a syntax error in Go")
+  end)
+
+  H.it("gives the Java scratch a file a public class can live in", function()
+    local saved = vim.g.kebab_scratch_dir
+    vim.g.kebab_scratch_dir = H.tmpdir("java-scratch")
+    local ok, path = require("kebab.scratch").open("java", { open = false })
+    vim.g.kebab_scratch_dir = saved
+    H.ok(ok, tostring(path))
+    local stem = vim.fn.fnamemodify(path, ":t:r")
+    H.matches("^Scratch%d+$", stem, "the file stem has to be a Java identifier: " .. stem)
+    local text = H.read(path)
+    H.matches("public class " .. stem .. "%s", text, "javac wants the class named after the file:\n" .. text)
+  end)
+
+  H.it("adds a Python dependency the way the project is actually laid out", function()
+    local deps = reg.deps_for("python")
+    H.ok(deps, "python should declare a deps handler")
+    local reqs = H.tmpdir("py-reqs")
+    H.write(reqs .. "/requirements.txt", "pandas")
+    local proj = H.tmpdir("py-proj")
+    H.write(proj .. "/pyproject.toml", "[project]")
+    -- `uv add` exits 2 without a pyproject.toml, which is the normal shape for
+    -- a requirements.txt project
+    local cmd = deps.command("pandas", { dir = reqs })
+    H.falsy(cmd[1] == "uv", "a requirements.txt-only project cannot use uv: " .. table.concat(cmd, " "))
+    H.matches("pip", table.concat(cmd, " "))
+    if vim.fn.executable("uv") == 1 then
+      H.eq({ "uv", "add", "pandas" }, deps.command("pandas", { dir = proj }))
+    end
+  end)
+end)
+
+H.describe("the SvelteKit route template", function()
+  local T = require("kebab.templates")
+
+  local function template(name)
+    for _, t in ipairs(T.available({})) do
+      if t.name == name then
+        return t
+      end
+    end
+  end
+
+  -- SvelteKit routes a file only when its name starts with "+", so the answer
+  -- names a directory; `about.svelte` is dead content.
+  H.it("turns a route name into <route>/+page.svelte", function()
+    local tpl = template("SvelteKit +page.svelte")
+    H.ok(tpl, "the template should be registered")
+    local dir = H.tmpdir("svelte-routes")
+    local ok, path = T.create(tpl, dir, "about", { open = false })
+    H.ok(ok, tostring(path))
+    H.eq(dir .. "/about/+page.svelte", path)
+  end)
+
+  H.it("accepts the blank answer its own prompt invites", function()
+    local tpl = template("SvelteKit +page.svelte")
+    local dir = H.tmpdir("svelte-here")
+    local ok, path = T.create(tpl, dir, "", { open = false })
+    H.ok(ok, tostring(path))
+    H.eq(dir .. "/+page.svelte", path)
+  end)
+
+  H.it("does not double the suffix when the answer already has it", function()
+    local tpl = template("SvelteKit +page.svelte")
+    local dir = H.tmpdir("svelte-full")
+    local ok, path = T.create(tpl, dir, "blog/+page.svelte", { open = false })
+    H.ok(ok, tostring(path))
+    H.eq(dir .. "/blog/+page.svelte", path)
+  end)
+
+  H.it("still requires a name for every other template", function()
+    local tpl = template("Go file")
+    H.ok(tpl)
+    local ok, err = T.create(tpl, H.tmpdir("go-blank"), "", { open = false })
+    H.falsy(ok)
+    H.matches("name is required", err)
+  end)
+end)

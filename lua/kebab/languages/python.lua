@@ -4,8 +4,13 @@ local S = require("kebab.scaffold")
 local PY_DEPS = {
   prompt = "Package to add (python): ",
   command = function(package, opts)
+    local dir = opts and opts.dir
+    -- `uv add` requires a pyproject.toml and exits 2 without one, so a
+    -- requirements.txt-only project (the usual shape for PySpark work) has to
+    -- go through pip -- the directory is already in hand for the venv below.
+    local has_pyproject = dir ~= nil and vim.uv.fs_stat(dir .. "/pyproject.toml") ~= nil
     -- uv is much faster and writes pyproject.toml itself; pip does neither.
-    if vim.fn.executable("uv") == 1 then
+    if vim.fn.executable("uv") == 1 and (has_pyproject or dir == nil) then
       local cmd = { "uv", "add" }
       if opts and opts.dev then
         table.insert(cmd, "--dev")

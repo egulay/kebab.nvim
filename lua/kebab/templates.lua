@@ -111,6 +111,12 @@ end
 ---@param dir string
 ---@param name string what the user typed
 function M.path_for(template, dir, name)
+  -- Some templates decide their own path from the answer: a SvelteKit route
+  -- directory becomes `<answer>/+page.svelte`, not `<answer>.svelte`.
+  if type(template.relative_path) == "function" then
+    local rel = template.relative_path(name)
+    return (dir:gsub("/+$", "")) .. "/" .. (rel:gsub("^/+", ""))
+  end
   -- An extension the user typed wins: "Thing.java" and "Thing" both work.
   local ext = template.extension
   if ext and ext ~= "" and not name:match("%." .. vim.pesc(ext) .. "$") then
@@ -163,10 +169,14 @@ function M.create(template, dir, name, opts)
     return false, "No template given"
   end
   if name == nil or vim.trim(name) == "" then
-    return false, "A file name is required"
+    -- a template whose prompt says "blank for here" has to accept blank
+    if not template.blank_name_ok then
+      return false, "A file name is required"
+    end
+    name = ""
   end
 
-  local ctx = M.context(template, dir, vim.trim(name), opts.answers)
+  local ctx = M.context(template, dir, vim.trim(name or ""), opts.answers)
   if vim.uv.fs_stat(ctx.path) then
     return false, ctx.path .. " already exists"
   end

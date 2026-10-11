@@ -61,6 +61,7 @@ lua/kebab/
 ├── lsp.lua              semantic queries (diagnostics/definition/refs/symbols/hover)
 ├── agent.lua            their CLI contract: rendering, JSON, exit codes
 ├── git.lua              the hand-rolled revert, testable without a tree window
+├── path.lua             expand a path WITHOUT vim.fn.expand's shell expansion
 ├── menus/
 │   ├── action.lua       introspectable menu actions -- build every entry here
 │   ├── editor.lua       right-click: Project/File/Edit/Code/Run/Git/View
@@ -220,6 +221,38 @@ client attached, file contents reverted.
   mismatch. Restart it.
 - `go get` must NOT be followed by `go mod tidy`: tidy drops any requirement
   nothing imports yet, deleting the dependency just added.
+- **`vim.fn.expand()` runs the shell for anything in backticks.**
+  `vim.fn.expand("`touch /tmp/pwn`")` creates the file. Any path from an
+  argument, a prompt or a `vim.g.*` override goes through `kebab.path.expand`
+  (`vim.fs.normalize`, which still does `~` and `$VAR`) instead. `path_spec`
+  asserts the payload is live under the old call and inert under the new one.
+- A literal NUL in a Lua pattern **truncates a character class**: `"([^\0]*)%z"`
+  raises "malformed pattern (missing ']')". Use `%z` on both sides.
+- `git status --porcelain` **quotes any path with a non-ASCII byte** and escapes
+  it C-style (`"sub/caf\303\251.txt"`). Stripping the quotes is not decoding
+  it. Read status with `-z`, which emits raw bytes NUL-separated with no
+  quoting; a rename then spends two fields, **new name first**.
+- Pass a clicked path to git as a `:(literal)` pathspec, or `*`, `?` and
+  `[...]` in a filename are glob metacharacters -- a SvelteKit `routes/[slug]`
+  is a pattern, not a directory name.
+- `git status` collapses an untracked directory into **one** `?? dir/` entry, so
+  counting plan entries understates a recursive delete (2 reported, 31 real).
+- A value interpolated into the Lua chunk `bin/kebab` generates must be
+  validated as a number, and a table key emitted in **bracket form** -- `local`
+  and `2fa` are not identifiers. A chunk that does not compile never reaches
+  `qa!`, so headless Neovim **hangs with no output** instead of erroring. Any
+  "kebab just sits there" report should be read as a malformed generated chunk.
+- Never fold stderr into stdout on a path that can emit `--json`: one LSP
+  warning prefixes the payload and makes it unparseable.
+- `string.gsub`'s *replacement* treats `%` as an escape, so substituting a user
+  path into a template eats characters. Pass a **function** as the replacement.
+- A warm-process request that **timed out** must not be retried as a one-shot:
+  the server may have executed and committed it. Only "nothing was sent" is
+  retryable. `jdbc.request` returns that as a third value.
+- `handle:kill()` then `handle:close()` in the same tick drops the pid from
+  libuv's queue before SIGCHLD, so the child is **never waitpid'd** and stays
+  `<defunct>`. Close the handle in the exit callback, which is also the only
+  place that can close the pipes of a process that exited on its own.
 
 ## House style
 

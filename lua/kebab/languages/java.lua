@@ -249,6 +249,9 @@ return {
       name = "Java (single file)",
       extension = "java",
       filetype = "java",
+      -- `scratch-1.java` cannot hold a public class: javac wants the file named
+      -- after it, so the buffer opened with a permanent error.
+      stem = "Scratch%d",
       render = function(ctx)
         -- the public class has to match the file name
         local class = (ctx.name:gsub("[^%w]", "_"))
@@ -269,8 +272,13 @@ return {
       file = ".gitignore",
       kinds = { "maven", "gradle" },
       lines = {
-        "target/", "build/", "!.mvn/wrapper/maven-wrapper.jar",
+        -- the negations have to come AFTER *.jar: git applies the last
+        -- matching pattern, so with them first the wrapper jars stay ignored
+        -- and ./mvnw or ./gradlew fails on a fresh clone
+        "target/", "build/",
         "*.class", "*.jar", "*.war",
+        "!.mvn/wrapper/maven-wrapper.jar",
+        "!gradle/wrapper/gradle-wrapper.jar",
         "", "# IDE", ".idea/", "*.iml", ".classpath", ".project", ".settings/",
         "", "# local config", "application-local.properties", "application-local.yml", ".env",
       },

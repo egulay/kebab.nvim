@@ -95,7 +95,12 @@ return {
           ('LABEL org.opencontainers.image.title="%s"'):format(ctx.project),
           "RUN useradd --create-home app",
           "USER app",
-          ("COPY --from=build /src/target/release/%s /usr/local/bin/app"):format(ctx.project),
+          -- cargo names the artifact after the crate, and the scaffold forces
+          -- the crate name to snake_case -- so a project directory called
+          -- my-crate builds target/release/my_crate.
+          ("COPY --from=build /src/target/release/%s /usr/local/bin/app"):format(
+            require("kebab.scaffold").sanitise(ctx.project, "snake")
+          ),
           'ENTRYPOINT ["/usr/local/bin/app"]',
         }
       end,
@@ -146,17 +151,27 @@ return {
         -- cargo creates the directory itself and initialises git, so it is
         -- given the destination directly.
         S.mkdir(S.parent_of(ctx.dest))
+        -- `cargo new` refuses a destination that already exists, even an empty
+        -- one -- which is exactly what :IdeInitHere hands it. `cargo init` is
+        -- the command for that case.
+        local exists = vim.uv.fs_stat(ctx.dest) ~= nil
+        local cmd = exists
+            and { "cargo", "init", "--" .. (ctx.answers.kind or "bin"), "--name", S.sanitise(ctx.name, "snake") }
+          or {
+            "cargo",
+            "new",
+            ctx.dest,
+            "--" .. (ctx.answers.kind or "bin"),
+            "--name",
+            S.sanitise(ctx.name, "snake"),
+          }
         S.run_steps({
           {
-            label = "cargo new",
-            cmd = {
-              "cargo", "new", ctx.dest,
-              "--" .. (ctx.answers.kind or "bin"),
-              "--name", S.sanitise(ctx.name, "snake"),
-            },
-            cwd = S.parent_of(ctx.dest),
+            label = exists and "cargo init" or "cargo new",
+            cmd = cmd,
+            cwd = exists and ctx.dest or S.parent_of(ctx.dest),
           },
-        }, S.parent_of(ctx.dest), done)
+        }, exists and ctx.dest or S.parent_of(ctx.dest), done)
       end,
     },
   },

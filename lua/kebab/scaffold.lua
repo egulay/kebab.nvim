@@ -80,4 +80,27 @@ function M.sanitise(name, style)
   return (name:gsub("[^%w_%-]", "-"))
 end
 
+---The package clause a new Go file in `dir` should carry.
+---
+---Go's package name is the directory's, but a directory name is not
+---necessarily a Go identifier: `~/Projects/my-tool` gave `package my-tool`,
+---which is a syntax error, and the whole package stopped type-checking.
+---@param dir string
+---@return string
+function M.go_package(dir)
+  -- At a module root the package is main, which is what the scaffold writes.
+  if vim.uv.fs_stat(dir .. "/go.mod") then
+    return "main"
+  end
+  local pkg = (vim.fn.fnamemodify(dir, ":t"):gsub("[^%w_]", "_"):lower())
+  if pkg == "" then
+    return "main"
+  end
+  -- an identifier cannot start with a digit
+  if pkg:match("^%d") then
+    pkg = "pkg_" .. pkg
+  end
+  return pkg
+end
+
 return M

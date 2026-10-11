@@ -49,8 +49,7 @@ return {
       prompt = "File name",
       filetypes = { "go" },
       render = function(ctx)
-        -- The package is the directory name in Go, not the path.
-        return { "package " .. (vim.fn.fnamemodify(ctx.dir, ":t")), "" }
+        return { "package " .. S.go_package(ctx.dir), "" }
       end,
     },
     {
@@ -66,7 +65,7 @@ return {
       end,
       render = function(ctx)
         return {
-          "package " .. (vim.fn.fnamemodify(ctx.dir, ":t")),
+          "package " .. S.go_package(ctx.dir),
           "",
           'import "testing"',
           "",

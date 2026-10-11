@@ -46,6 +46,20 @@ return {
       extension = "svelte",
       prompt = "Route directory (blank for here)",
       filetypes = { "svelte" },
+      -- SvelteKit routes a file only when its name starts with "+", so the
+      -- answer names a directory. Feeding it to the file name produced
+      -- `about.svelte`, which SvelteKit ignores entirely.
+      blank_name_ok = true,
+      relative_path = function(name)
+        local route = vim.trim(name or ""):gsub("^/+", ""):gsub("/+$", "")
+        if route == "" then
+          return "+page.svelte"
+        end
+        if route:match("%+[%w%-%.]+%.svelte$") then
+          return route
+        end
+        return route .. "/+page.svelte"
+      end,
       render = function()
         return {
           '<script lang="ts">',

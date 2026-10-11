@@ -42,15 +42,17 @@ function M.next_path(kind)
   local dir = M.dir()
   vim.fn.mkdir(dir, "p")
   local ext = kind.extension
+  -- A language may need a stem that is a valid identifier in it.
+  local stem = kind.stem or "scratch-%d"
   for i = 1, 1000 do
-    local path = ("%s/scratch-%d.%s"):format(dir, i, ext)
+    local path = ("%s/%s.%s"):format(dir, stem:format(i), ext)
     if not vim.uv.fs_stat(path) then
       return path
     end
   end
   -- 1000 scratches of one kind is not a real case, but silently overwriting
   -- the last one would be.
-  return ("%s/scratch-%s.%s"):format(dir, tostring(vim.uv.hrtime()), ext)
+  return ("%s/%s.%s"):format(dir, stem:format(vim.uv.hrtime()), ext)
 end
 
 ---Open a new scratch file of `kind`.
