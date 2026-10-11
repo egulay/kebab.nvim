@@ -183,3 +183,128 @@ H.describe("kebab.git describe_plan", function()
       git.describe_plan({ modified = {}, untracked = { "/r/c" } }))
   end)
 end)
+
+-- `git status --porcelain` quotes any path with a non-ASCII byte and escapes it
+-- C-style, so stripping just the quotes left a filename that does not exist:
+-- the revert skipped those files while still deleting the untracked ones.
+H.describe("reverting paths git has to quote", function()
+  H.it("reverts a non-ASCII filename", function()
+    local repo, g = H.git_repo("git-utf8")
+    vim.fn.mkdir(repo .. "/sub", "p")
+    for _, name in ipairs({ "plain.txt", "Şirket.java", "café.txt", "naïve b.txt" }) do
+      H.write(repo .. "/sub/" .. name, "orig")
+    end
+    g("add", "-A")
+    g("commit", "-q", "-m", "add")
+    for _, name in ipairs({ "plain.txt", "Şirket.java", "café.txt", "naïve b.txt" }) do
+      H.write(repo .. "/sub/" .. name, "EDITED")
+    end
+
+    local plan, err = git.revert_plan(repo .. "/sub")
+    H.ok(plan, tostring(err))
+    H.eq(4, #plan.modified, "every quoted path should be in the plan: " .. vim.inspect(plan.modified))
+    for _, rel in ipairs(plan.modified) do
+      H.falsy(rel:find("\\"), rel .. " still carries git's C-style escapes")
+      H.ok(H.exists(repo .. "/" .. rel), rel .. " should be a path that exists")
+    end
+
+    local ok, failed = git.apply_revert(plan)
+    H.ok(ok, vim.inspect(failed))
+    for _, name in ipairs({ "plain.txt", "Şirket.java", "café.txt", "naïve b.txt" }) do
+      H.eq("orig", H.read(repo .. "/sub/" .. name), name .. " should be restored")
+    end
+  end)
+
+  H.it("keeps a glob character in a path from matching a sibling", function()
+    local repo, g = H.git_repo("git-glob")
+    vim.fn.mkdir(repo .. "/routes/[slug]", "p")
+    vim.fn.mkdir(repo .. "/routes/s", "p")
+    H.write(repo .. "/routes/[slug]/page.svelte", "orig")
+    H.write(repo .. "/routes/s/page.svelte", "orig")
+    g("add", "-A")
+    g("commit", "-q", "-m", "routes")
+    H.write(repo .. "/routes/[slug]/page.svelte", "EDITED")
+    H.write(repo .. "/routes/s/page.svelte", "EDITED")
+
+    local plan = git.revert_plan(repo .. "/routes/[slug]")
+    H.eq({ "routes/[slug]/page.svelte" }, plan.modified, "only the clicked route")
+    H.ok(git.apply_revert(plan))
+    H.eq("orig", H.read(repo .. "/routes/[slug]/page.svelte"))
+    H.eq("EDITED", H.read(repo .. "/routes/s/page.svelte"), "the sibling route must be untouched")
+  end)
+
+  H.it("does not treat a rename's old name as a separate change", function()
+    local repo, g = H.git_repo("git-rename-z")
+    H.write(repo .. "/old.txt", "orig")
+    g("add", "-A")
+    g("commit", "-q", "-m", "add")
+    g("mv", "old.txt", "new.txt")
+    local plan = git.revert_plan(repo)
+    H.ok(vim.tbl_contains(plan.modified, "new.txt"), vim.inspect(plan.modified))
+    H.falsy(vim.tbl_contains(plan.modified, "old.txt"), "the old name is not on disk: " .. vim.inspect(plan.modified))
+  end)
+end)
+
+-- Restoring is reversible; deleting is not. Doing the deletions anyway after a
+-- failed checkout destroyed new work *and* left the edits the user asked to
+-- discard.
+H.describe("a revert whose restore fails", function()
+  H.it("deletes nothing and says why", function()
+    local repo, g = H.git_repo("git-locked")
+    H.write(repo .. "/tracked.txt", "orig")
+    g("add", "-A")
+    g("commit", "-q", "-m", "add")
+    H.write(repo .. "/tracked.txt", "EDITED")
+    H.write(repo .. "/brand-new.txt", "IRREPLACEABLE")
+    -- what another git process holding the index looks like
+    H.write(repo .. "/.git/index.lock", "")
+
+    local plan = git.revert_plan(repo)
+    H.ok(#plan.modified > 0 and #plan.untracked > 0, "the plan needs both halves")
+    local ok, failed = git.apply_revert(plan)
+    H.falsy(ok, "a locked index is a failure")
+    H.ok(H.exists(repo .. "/brand-new.txt"), "untracked work must survive a failed revert")
+    H.eq("EDITED", H.read(repo .. "/tracked.txt"), "and nothing was restored either")
+    H.matches("NOT deleted", table.concat(failed, "\n"), "the user has to be told the deletions were skipped")
+    vim.fn.delete(repo .. "/.git/index.lock")
+  end)
+
+  H.it("still restores the files it can when one path is unmatched", function()
+    local repo, g = H.git_repo("git-partial")
+    for _, n in ipairs({ "a.txt", "b.txt" }) do
+      H.write(repo .. "/" .. n, "orig")
+    end
+    g("add", "-A")
+    g("commit", "-q", "-m", "add")
+    H.write(repo .. "/a.txt", "EDITED")
+    H.write(repo .. "/b.txt", "EDITED")
+    -- one pathspec git cannot match used to abort the whole batch
+    local plan = git.revert_plan(repo)
+    table.insert(plan.modified, "never-committed.txt")
+    local ok, failed = git.apply_revert(plan)
+    H.falsy(ok, "the bogus path should be reported")
+    H.eq("orig", H.read(repo .. "/a.txt"), "a.txt should still be restored")
+    H.eq("orig", H.read(repo .. "/b.txt"), "b.txt should still be restored")
+    H.eq(1, #failed, vim.inspect(failed))
+  end)
+end)
+
+H.describe("counting what a delete really covers", function()
+  H.it("counts the files inside an untracked directory", function()
+    local repo = H.git_repo("git-count")
+    vim.fn.mkdir(repo .. "/newfeature/deeper", "p")
+    for i = 1, 12 do
+      H.write(repo .. ("/newfeature/f%d.java"):format(i), "x")
+    end
+    H.write(repo .. "/newfeature/deeper/g.java", "x")
+    H.write(repo .. "/loose.txt", "x")
+
+    local plan = git.revert_plan(repo)
+    local msg = git.describe_plan(plan)
+    H.matches("DELETE 14 untracked file", msg, "a collapsed `?? dir/` entry understated this: " .. msg)
+    H.matches("1 new directory", msg, "and the user should know it is recursive: " .. msg)
+    H.eq(13, git.untracked_file_count(repo .. "/newfeature"))
+    H.eq(1, git.untracked_file_count(repo .. "/loose.txt"))
+    H.eq(1, git.untracked_file_count(repo .. "/does-not-exist"))
+  end)
+end)
