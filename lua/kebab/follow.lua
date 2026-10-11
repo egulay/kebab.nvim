@@ -15,8 +15,9 @@ local M = {}
 
 local STATE = {
   running = false,
-  stop_fn = nil,
-  root = nil,
+  stop_fns = {},     -- one per watched root
+  roots = {},
+  root = nil,        -- the first one, for the statusline
   pending = {},      -- path -> change type, coalesced
   timer = nil,
   last = nil,        -- the last path followed, for the statusline
@@ -367,18 +368,68 @@ function M.cancel_timer()
   return true
 end
 
----Start watching `root`.
+---Every directory following should watch.
 ---
----Uses vim._watch.inotify. Note what *not* to use:
----vim.uv.new_fs_event():start(dir, { recursive = true }, cb) reports success on
----Linux and then does not recurse, so it silently watches only the top
----directory.
----@param root? string
+---The project root, plus anything in `vim.g.kebab_follow_roots`. That list is
+---what makes an agent working in a *different* project visible: a watcher only
+---ever sees its own tree, so following the project you have open cannot show
+---you edits somewhere else -- which is the one thing this feature exists for.
+---
+---Deliberately not "all of ~/Projects" by default: `vim._watch.inotify` shells
+---out to `inotifywait -r`, which places a watch on every subdirectory, so a
+---large tree can exhaust `fs.inotify.max_user_watches`. Name the projects you
+---want.
+---@param root? string an explicit root, used alone when given
+---@return string[]
+function M.roots(root)
+  if type(root) == "table" then
+    return root
+  end
+  if type(root) == "string" and root ~= "" then
+    return { root }
+  end
+  local out = {}
+  local function add(dir)
+    if type(dir) ~= "string" or dir == "" then
+      return
+    end
+    local full = require("kebab.path").expand(dir)
+    if vim.fn.isdirectory(full) == 1 and not vim.tbl_contains(out, full) then
+      out[#out + 1] = full
+    end
+  end
+  add((LazyVim and LazyVim.root and LazyVim.root()) or vim.uv.cwd())
+  local extra = vim.g.kebab_follow_roots
+  if type(extra) == "string" then
+    add(extra)
+  elseif type(extra) == "table" then
+    for _, dir in ipairs(extra) do
+      add(dir)
+    end
+  end
+  return out
+end
+
+---Start watching. `root` may be a directory, a list of them, or nil for
+---M.roots().
+---@param root? string|string[]
+---@return boolean ok, string|nil err
 function M.start(root)
   if STATE.running then
     return false, "already following"
   end
-  root = root or ((LazyVim and LazyVim.root and LazyVim.root()) or vim.uv.cwd())
+  -- Never abandon watchers from a previous start. A scheduled autostart can
+  -- land after the caller already stopped -- it sets running = false, so this
+  -- is reachable -- and the old inotifywait would then run until the process
+  -- died. Seven of them survived one suite run that way.
+  for _, stop in ipairs(STATE.stop_fns or {}) do
+    pcall(stop)
+  end
+  STATE.stop_fns = {}
+  local roots = M.roots(root)
+  if #roots == 0 then
+    return false, "nothing to watch"
+  end
 
   local ok, watch = pcall(require, "vim._watch")
   if not ok then
@@ -389,18 +440,30 @@ function M.start(root)
     return false, "no file-watching backend available"
   end
 
-  local started, stop_or_err = pcall(backend, root, {}, function(path, _change)
-    -- The callback runs off the main loop; everything that touches buffers is
-    -- scheduled by on_change's timer.
-    M.on_change(path)
-  end)
-  if not started then
-    return false, "could not start the watcher: " .. tostring(stop_or_err)
+  local stops, failed = {}, {}
+  for _, dir in ipairs(roots) do
+    local started, stop_or_err = pcall(backend, dir, {}, function(path, _change)
+      -- The callback runs off the main loop; everything that touches buffers is
+      -- scheduled by on_change's timer.
+      M.on_change(path)
+    end)
+    if started then
+      if type(stop_or_err) == "function" then
+        stops[#stops + 1] = stop_or_err
+      end
+    else
+      failed[#failed + 1] = ("%s (%s)"):format(dir, tostring(stop_or_err))
+    end
+  end
+
+  if #stops == 0 then
+    return false, "could not start the watcher: " .. table.concat(failed, ", ")
   end
 
   STATE.running = true
-  STATE.stop_fn = type(stop_or_err) == "function" and stop_or_err or nil
-  STATE.root = root
+  STATE.stop_fns = stops
+  STATE.roots = roots
+  STATE.root = roots[1]
   STATE.count = 0
   -- Something else is about to move the cursor on its own, so say so without
   -- being asked. Optional on purpose: a broken indicator must not stop
@@ -408,6 +471,10 @@ function M.start(root)
   pcall(function()
     require("kebab.ghostbar").show()
   end)
+  if #failed > 0 then
+    -- Partial is still useful; say which root is not covered.
+    vim.notify(("Follow: could not watch %s"):format(table.concat(failed, ", ")), vim.log.levels.WARN)
+  end
   return true
 end
 
@@ -419,16 +486,32 @@ function M.stop()
     STATE.pending = {}
     return false, "not following"
   end
-  if STATE.stop_fn then
-    pcall(STATE.stop_fn)
+  -- A stop the user asked for must stick: autostart fires on BufEnter, so
+  -- without this the next buffer switch started it again and <leader>uf could
+  -- not turn it off at all. Cleared when the project changes.
+  STATE.suppress_autostart = true
+  for _, stop in ipairs(STATE.stop_fns or {}) do
+    pcall(stop)
   end
   M.cancel_timer()
   STATE.running = false
-  STATE.stop_fn = nil
+  STATE.stop_fns = {}
+  STATE.roots = {}
   STATE.pending = {}
   pcall(function()
     require("kebab.ghostbar").hide()
   end)
+  return true
+end
+
+---Let autostart start again: forget both the "already started for this tree"
+---marker and a stop the user asked for.
+---
+---Called when the project changes, and by the specs, which need the same
+---fresh-decision semantics within one session.
+function M.allow_autostart()
+  STATE.autostarted_for = nil
+  STATE.suppress_autostart = false
   return true
 end
 
@@ -440,6 +523,7 @@ function M.state()
   return {
     running = STATE.running,
     root = STATE.root,
+    roots = vim.deepcopy(STATE.roots or {}),
     last = STATE.last,
     count = STATE.count,
     pending = vim.tbl_count(STATE.pending),
@@ -451,7 +535,8 @@ function M.status()
   if not STATE.running then
     return ""
   end
-  return ("󰊠 following%s"):format(STATE.count > 0 and (" " .. STATE.count) or "")
+  local extra = #(STATE.roots or {}) > 1 and ("/%d"):format(#STATE.roots) or ""
+  return ("󰊠 following%s%s"):format(extra, STATE.count > 0 and (" " .. STATE.count) or "")
 end
 
 function M.toggle()
@@ -462,12 +547,18 @@ function M.toggle()
     end
     return ok
   end
+  STATE.suppress_autostart = false
   local ok, err = M.start()
   if not ok then
     vim.notify("Follow: " .. tostring(err), vim.log.levels.WARN)
     return false
   end
-  vim.notify(("Follow: on — watching %s"):format(vim.fn.fnamemodify(STATE.root, ":~")))
+  local roots = STATE.roots or { STATE.root }
+  local shown = {}
+  for _, dir in ipairs(roots) do
+    shown[#shown + 1] = vim.fn.fnamemodify(dir, ":~")
+  end
+  vim.notify(("Follow: on — watching %s"):format(table.concat(shown, ", ")))
   return true
 end
 
@@ -478,18 +569,83 @@ function M.setup()
 
   vim.api.nvim_create_user_command("IdeFollowStatus", function()
     local s = M.state()
-    vim.notify(("Follow: %s%s"):format(
-      s.running and "on" or "off",
-      s.running and ("\nroot: " .. tostring(s.root) .. "\nfollowed: " .. s.count) or ""))
+    if not s.running then
+      -- Say how to turn it on. "Follow: off" on its own was the whole
+      -- diagnosis a user got when they expected it to be working.
+      return vim.notify(
+        "Follow: off\n<leader>uf or :IdeFollow turns it on"
+          .. "\nvim.g.kebab_follow_autostart = true starts it for every project"
+      )
+    end
+    vim.notify(("Follow: on\nwatching: %s\nfollowed: %d"):format(
+      table.concat(s.roots and #s.roots > 0 and s.roots or { tostring(s.root) }, "\n          "),
+      s.count
+    ))
   end, { desc = "Report what the follower is doing" })
+
+  local group = vim.api.nvim_create_augroup("kebab_follow", { clear = true })
 
   -- Stopping on exit matters: an inotify watch with a dead callback is a leak.
   vim.api.nvim_create_autocmd("VimLeavePre", {
-    group = vim.api.nvim_create_augroup("kebab_follow", { clear = true }),
+    group = group,
     callback = function()
       pcall(M.stop)
     end,
   })
+
+  -- Opt-in auto-start, via vim.g.kebab_follow_autostart. Off by default,
+  -- because a watcher that moves your cursor should be asked for -- but having
+  -- to press <leader>uf in every session is how you end up believing the
+  -- feature does not work at all.
+  --
+  -- The flag is read inside the callback, never here. setup() is called from
+  -- another spec's `init`, and lazy does not order `init` functions, so
+  -- deciding at setup time meant the autocmd was never registered whenever
+  -- that init happened to run before the one setting the flag.
+  local function autostart()
+    if vim.g.kebab_follow_autostart ~= true or M.running() or STATE.suppress_autostart then
+      return
+    end
+    -- Once per tree. BufEnter fires constantly, and `M.running()` alone was
+    -- not enough: any stop in between let it start another watcher, which is
+    -- how one session ended up with eight inotifywait processes on one
+    -- directory.
+    local roots = M.roots()
+    local key = table.concat(roots, "\n")
+    if key == "" or STATE.autostarted_for == key then
+      return
+    end
+    STATE.autostarted_for = key
+    local ok, err = M.start()
+    if not ok and err ~= "already following" and err ~= "nothing to watch" then
+      vim.notify_once(("Follow: could not start automatically (%s)"):format(tostring(err)), vim.log.levels.WARN)
+    end
+  end
+
+  -- VimEnter for the session's own project, BufEnter because VimEnter has not
+  -- fired while `-c` commands run and under --headless may never fire at all
+  -- (the same trap explorer.lua hit), and DirChanged for `kebab open` /
+  -- :IdeOpenProject, which change the working directory.
+  vim.api.nvim_create_autocmd({ "VimEnter", "BufEnter", "DirChanged" }, {
+    group = group,
+    nested = true,
+    callback = function(ev)
+      -- A new project means a new tree: restart rather than extend.
+      if ev.event == "DirChanged" then
+        if M.running() then
+          pcall(M.stop)
+        end
+        -- A different project is a fresh decision.
+        M.allow_autostart()
+      end
+      vim.schedule(autostart)
+    end,
+  })
+  -- And if the editor is already up by the time setup runs, nothing above will
+  -- fire on its own.
+  if vim.v.vim_did_enter == 1 then
+    vim.schedule(autostart)
+  end
 end
 
 return M

@@ -30,9 +30,28 @@ local function full_name()
   return table.concat(parts, " › ")
 end
 
+---Stop the file follower, whatever a test left behind.
+---
+---Enforced after *every* test, not only between spec files: a test that errors
+---before its own `F.stop()` leaves an inotifywait process running and its
+---callbacks move the next test's buffers around. Seven survived one full run
+---that way -- each one a test whose assertion failed or timed out first.
+function H.stop_following()
+  local F = package.loaded["kebab.follow"]
+  if not F then
+    return false
+  end
+  pcall(F.stop)
+  if F.allow_autostart then
+    pcall(F.allow_autostart)
+  end
+  return true
+end
+
 function H.it(name, fn)
   local label = full_name() .. " › " .. name
   local ok, err = pcall(fn)
+  pcall(H.stop_following)
   if ok then
     results.pass = results.pass + 1
     io.write("  ok   " .. label .. "\n")
@@ -310,6 +329,18 @@ function H.drain(ms) vim.wait(ms or 50, function() return false end, 10) end
 H.sandbox = nil
 
 function H.reset_editor()
+  -- Stop the follower. A spec that leaves it running leaves an inotifywait
+  -- process behind, and its callbacks move the *next* spec's buffers around.
+  pcall(function()
+    local F = package.loaded["kebab.follow"]
+    if F then
+      F.stop()
+      if F.allow_autostart then
+        F.allow_autostart()
+      end
+    end
+  end)
+
   pcall(vim.cmd, "silent! only")
 
   -- Back to the sandbox. A spec that cd's somewhere to exercise a cwd-relative

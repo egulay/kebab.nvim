@@ -8,6 +8,12 @@ local H = dofile(root .. "/tests/harness.lua")
 
 _G.KEBAB_TEST = { root = root, H = H }
 
+-- The suite boots the real user config, so a config that auto-starts the file
+-- follower would have a live watcher moving buffers around under the specs --
+-- and every spec asserting "following is off" would fail for a setting that is
+-- perfectly reasonable. Specs that want it opt in explicitly.
+vim.g.kebab_follow_autostart = false
+
 -- Never run from the project directory: a spec that writes a file must not be
 -- able to land in the repo.
 local sandbox = H.tmpdir("cwd")

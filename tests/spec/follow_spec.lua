@@ -387,3 +387,139 @@ H.describe("configuring the ignore lists", function()
     end)
   end)
 end)
+
+-- Having to press <leader>uf in every session is how you end up believing the
+-- feature does not work at all. The flag is read inside the callback, never at
+-- setup time: setup() is called from another spec's `init`, and lazy does not
+-- order `init` functions -- deciding early meant the autocmd was never
+-- registered whenever that init ran before the one setting the flag.
+H.describe("starting itself", function()
+  local function with_autostart(value, fn)
+    local saved = vim.g.kebab_follow_autostart
+    vim.g.kebab_follow_autostart = value
+    -- Within one session an earlier start, or an earlier deliberate stop, both
+    -- latch -- which is the point of them. A test asking "would it start?"
+    -- needs the same fresh decision a new project gets.
+    F.allow_autostart()
+    local ok, err = pcall(fn)
+    vim.g.kebab_follow_autostart = saved
+    pcall(F.stop)
+    F.allow_autostart()
+    if not ok then
+      error(err, 0)
+    end
+  end
+
+  H.it("registers its autocmds whatever the flag was at setup time", function()
+    -- setup() runs with the flag unset, which is the ordering that used to
+    -- lose the autocmd entirely
+    local saved = vim.g.kebab_follow_autostart
+    vim.g.kebab_follow_autostart = nil
+    F.setup()
+    vim.g.kebab_follow_autostart = saved
+
+    local aus = vim.api.nvim_get_autocmds({ group = "kebab_follow" })
+    local events = {}
+    for _, a in ipairs(aus) do
+      events[a.event] = true
+    end
+    H.ok(events["VimLeavePre"], "the watcher must still be stopped on exit")
+    H.ok(events["DirChanged"], "opening another project should re-point it")
+    H.ok(
+      events["VimEnter"] or events["BufEnter"],
+      "it needs a start trigger: " .. vim.inspect(vim.tbl_keys(events))
+    )
+  end)
+
+  H.it("does nothing when the flag is off", function()
+    with_autostart(nil, function()
+      H.falsy(F.running())
+      vim.api.nvim_exec_autocmds("BufEnter", { modeline = false })
+      H.drain(200)
+      H.falsy(F.running(), "it must stay off unless asked for")
+    end)
+  end)
+
+  H.it("starts without a keypress when the flag is on", function()
+    if vim.fn.executable("inotifywait") == 0 then
+      H.skip("inotify-tools is needed to start a watcher")
+    end
+    with_autostart(true, function()
+      H.falsy(F.running(), "this starts from off")
+      vim.api.nvim_exec_autocmds("BufEnter", { modeline = false })
+      local started = vim.wait(10000, function()
+        return F.running()
+      end, 100)
+      H.ok(started, "the autocmd should have started it")
+      H.ok(#F.state().roots > 0, "and it should be watching something")
+    end)
+  end)
+end)
+
+H.describe("watching more than one project", function()
+  -- A watcher only ever sees its own tree, so following the project you have
+  -- open cannot show you an agent working somewhere else -- which is the one
+  -- thing this feature exists for.
+  H.it("resolves the project root plus any named extras", function()
+    local a = H.tmpdir("roots-a")
+    local b = H.tmpdir("roots-b")
+    local saved = vim.g.kebab_follow_roots
+    local cwd = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(a))
+
+    vim.g.kebab_follow_roots = nil
+    H.eq({ vim.fn.resolve(a) }, vim.tbl_map(vim.fn.resolve, F.roots()), "just the project by default")
+
+    vim.g.kebab_follow_roots = { b }
+    local both = vim.tbl_map(vim.fn.resolve, F.roots())
+    H.eq(2, #both, vim.inspect(both))
+    H.ok(vim.tbl_contains(both, vim.fn.resolve(b)), "the named project should be included")
+
+    -- a root that does not exist is dropped rather than failing the start
+    vim.g.kebab_follow_roots = { b, "/nonexistent-kebab-root-xyz" }
+    H.eq(2, #F.roots(), "a missing root is skipped")
+
+    -- and an explicit argument still wins, which is what the specs above use
+    H.eq({ a }, F.roots(a))
+
+    vim.g.kebab_follow_roots = saved
+    vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+  end)
+
+  -- The wiring, asserted deterministically. Racing a real inotify event in the
+  -- full suite is not: the event loop is busy with language servers and the
+  -- watcher's own delivery is asynchronous, so this raced about one run in
+  -- three. The end-to-end jump is already covered by the single-root tests
+  -- above, which exercise the identical flush path.
+  H.it("watches a project it was told about, and accepts its changes", function()
+    if vim.fn.executable("inotifywait") == 0 then
+      H.skip("inotify-tools is needed to start a watcher")
+    end
+    local mine = H.tmpdir("two-mine")
+    local other = H.tmpdir("two-other")
+    H.write(mine .. "/a.txt", "mine")
+    local saved_roots = vim.g.kebab_follow_roots
+    local saved_cfg = vim.g.kebab_follow
+    vim.g.kebab_follow_roots = { other }
+    vim.g.kebab_follow = { open_new = true, debounce_ms = 100 }
+
+    local ok, err = pcall(function()
+      vim.cmd("edit " .. vim.fn.fnameescape(mine .. "/a.txt"))
+      H.ok(F.start(), "it should watch both")
+      local roots = vim.tbl_map(vim.fn.resolve, F.state().roots)
+      H.eq(2, #roots, vim.inspect(roots))
+      H.ok(vim.tbl_contains(roots, vim.fn.resolve(other)), "the named project should be watched")
+
+      -- a path in the other project is ours to act on, not ignored
+      local appeared = other .. "/appeared.txt"
+      H.write(appeared, "written by something else")
+      H.eq(true, F.on_change(appeared), "a change there must be accepted")
+      H.falsy(F.ignored(appeared), "and not filtered out")
+    end)
+    pcall(F.stop)
+    vim.g.kebab_follow_roots = saved_roots
+    vim.g.kebab_follow = saved_cfg
+    H.reset_editor()
+    H.ok(ok, tostring(err))
+  end)
+end)

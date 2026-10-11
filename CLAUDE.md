@@ -390,6 +390,26 @@ client attached, file contents reverted.
 - A debounce set keyed by path **loses arrival order**: `follow`'s "latest" and
   "first" were both `table.sort` plus an end, i.e. alphabetical -- effectively
   swapping the two modes. `STATE.pending[path]` holds a sequence number now.
+- **`vim.g.kebab_follow_autostart` is read in the callback, never at setup
+  time.** `follow.setup()` is called from another spec's `init` and lazy does
+  not order `init` functions, so deciding early meant the autocmd was simply
+  never registered whenever that init ran first -- the feature looked dead.
+- Autostart must latch, both ways: once per tree (`BufEnter` fires constantly,
+  and one session otherwise accumulated eight watchers on one directory) and
+  **a stop the user asked for has to stick**, or the next buffer switch starts
+  it again and `<leader>uf` cannot turn it off. `follow.allow_autostart()`
+  clears both, and `DirChanged` calls it because a new project is a fresh
+  decision.
+- A watcher only ever sees **its own tree**, so following the project you have
+  open cannot show an agent working elsewhere. `vim.g.kebab_follow_roots` names
+  extra trees; do not default it to a large directory, because
+  `vim._watch.inotify` places a watch per subdirectory.
+- `H.it` stops the follower after **every** test. A test that errors before its
+  own `stop()` leaves an inotifywait running whose callbacks move the next
+  test's buffers. Note the residue that remains: a *full* suite run still ends
+  with a handful of watchers on the test sandbox, which `follow` or `ghostbar`
+  alone do not leave -- the stop callbacks run but do not kill under a loaded
+  event loop. A real session is clean: start, work, `:qa` leaves none.
 - A watcher event can arrive **after `stop()`**: the stop is an asynchronous
   SIGINT and inotifywait's buffered lines still come through. `on_change` and
   `flush` check `STATE.running`, and `stop()` closes the debounce timer even

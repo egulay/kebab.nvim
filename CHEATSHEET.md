@@ -350,7 +350,7 @@ will resolve against the system interpreter instead of your venv.
 
 ## Following edits made outside the editor
 
-`<leader>uf`, or `:IdeFollow`. Off by default.
+`<leader>uf`, or `:IdeFollow`. Off by default — or automatic, see below.
 
 When something else changes a file in the project — an AI agent working in it,
 another editor, a formatter, a `git checkout` — the view moves to that file and
@@ -385,6 +385,32 @@ back to a running change count once that name is a couple of seconds old. It is
 not focusable and has no mappings — it cannot take your cursor. It appears when
 following starts and goes away when it stops, including when following stops on
 its own.
+
+### Having it on without pressing anything
+
+For watching an AI agent work, the two settings that matter:
+
+```lua
+vim.g.kebab_follow_autostart = true          -- start it for every project
+vim.g.kebab_follow = { open_new = true }     -- follow files it *creates* too
+```
+
+With those, opening a project starts the watcher, the badge appears by itself,
+and a file the agent edits **or adds** pulls the view across with the cursor on
+the first changed line. `<leader>uf` still turns it off, and a stop you asked
+for sticks — it will not restart itself until you open another project.
+
+An agent working in a repo you do *not* have open is a different tree, and a
+watcher only ever sees its own. Name it:
+
+```lua
+vim.g.kebab_follow_roots = { "~/Projects/the-other-one" }
+```
+
+One inotify watch is placed per subdirectory, so name projects rather than all
+of `~/Projects`, or you can exhaust `fs.inotify.max_user_watches`.
+
+### Everything else it takes
 
 ```lua
 vim.g.kebab_follow = {
