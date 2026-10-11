@@ -189,10 +189,28 @@ function M.create(spec, done)
   end
 
   local dest = require("kebab.path").expand(spec.dest or (vim.fn.expand("~/Projects") .. "/" .. name))
-  if uv.fs_stat(dest) and #vim.fn.readdir(dest) > 0 then
-    local err = "Directory exists and is not empty: " .. dest
+  local stat = uv.fs_stat(dest)
+  if stat and stat.type ~= "directory" then
+    -- readdir() on a file returns an empty list (it only echoes E484), so this
+    -- used to look like an empty directory and the scaffold threw later.
+    local err = "Not a directory: " .. dest
     vim.notify(err, vim.log.levels.ERROR)
     return done(false, err, dest)
+  end
+  if stat then
+    local listed, entries = pcall(vim.fn.readdir, dest)
+    if not listed then
+      local err = "Could not read " .. dest
+      vim.notify(err, vim.log.levels.ERROR)
+      return done(false, err, dest)
+    end
+    -- :IdeInitHere asks the user first and then sets this, so its "Scaffold
+    -- into it anyway?" confirmation actually means something.
+    if #entries > 0 and not spec.allow_non_empty then
+      local err = "Directory exists and is not empty: " .. dest
+      vim.notify(err, vim.log.levels.ERROR)
+      return done(false, err, dest)
+    end
   end
 
   local missing = M.missing_requirements(type_def)
@@ -236,7 +254,12 @@ function M.create(spec, done)
 
   vim.notify("Creating " .. type_def.label .. " in " .. dest)
   local ctx = { dest = dest, name = name, answers = answers, type = type_def }
-  type_def.build(ctx, function(ok, err)
+  local finished = false
+  local function finish(ok, err)
+    if finished then
+      return
+    end
+    finished = true
     if not ok then
       vim.notify("Project creation failed", vim.log.levels.ERROR)
       return done(false, err or "build failed", dest)
@@ -246,7 +269,14 @@ function M.create(spec, done)
       M.open_dir(dest)
     end
     done(true, nil, dest)
-  end)
+  end
+  -- A build that throws has to answer anyway: `done` is how a non-interactive
+  -- caller learns the outcome, and `kebab new --no-open` waits for it, so an
+  -- unhandled error used to hang headless Neovim forever with no output.
+  local ran, err = pcall(type_def.build, ctx, finish)
+  if not ran then
+    finish(false, ("%s failed: %s"):format(type_def.label, tostring(err)))
+  end
 end
 
 -- --------------------------------------------------------------- the wizard
@@ -326,6 +356,8 @@ function M.init_here()
           name = vim.fn.fnamemodify(dest, ":t"),
           dest = dest,
           answers = answers,
+          -- the user has already been asked, below
+          allow_non_empty = true,
         })
       end)
     end)

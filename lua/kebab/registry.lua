@@ -77,6 +77,12 @@ local function apply_user(languages)
   local extra = vim.g.kebab_languages
   if type(extra) == "function" then
     local ok, res = pcall(extra)
+    if not ok then
+      vim.notify(
+        ("kebab: vim.g.kebab_languages failed: %s"):format(tostring(res)),
+        vim.log.levels.WARN
+      )
+    end
     extra = ok and res or nil
   end
 
@@ -107,6 +113,17 @@ local function apply_user(languages)
       end
     end
     languages = keep
+  end
+
+  -- `generic` claims the `.git` marker and the empty scaffold, so it is the
+  -- fallback and has to be tested last. A language added through
+  -- vim.g.kebab_languages or M.register is appended, which put it *after*
+  -- generic -- and then kind_of() answered "dir" for every real project.
+  for i, lang in ipairs(languages) do
+    if lang.key == "generic" and i ~= #languages then
+      table.insert(languages, table.remove(languages, i))
+      break
+    end
   end
 
   return languages
@@ -141,7 +158,17 @@ function M.register(lang)
       return languages[i]
     end
   end
-  languages[#languages + 1] = lang
+  -- Before `generic`, never after it: generic's `.git` marker is the fallback
+  -- and matches every repository, so a language ranked below it is unreachable
+  -- and kind_of() answers "dir" for a project this language owns.
+  local at = #languages + 1
+  for i, existing in ipairs(languages) do
+    if existing.key == "generic" then
+      at = i
+      break
+    end
+  end
+  table.insert(languages, at, lang)
   return lang
 end
 
@@ -219,7 +246,8 @@ function M.project_types()
   local out, seen = {}, {}
   for _, lang in ipairs(M.languages()) do
     for _, t in ipairs(lang.project_types or {}) do
-      if not seen[t.key] then
+      -- a type without a key would be `seen[nil]`, i.e. "table index is nil"
+      if t.key ~= nil and not seen[t.key] then
         seen[t.key] = true
         local copy = vim.tbl_extend("keep", { language = lang.key }, t)
         out[#out + 1] = copy

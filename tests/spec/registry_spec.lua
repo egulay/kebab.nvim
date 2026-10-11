@@ -271,3 +271,72 @@ H.describe("nothing is hardcoded any more", function()
     end
   end)
 end)
+
+-- `generic` claims the `.git` marker and the empty scaffold, so it is the
+-- fallback and must be tested last. A language added by a user was appended
+-- *after* it, which made the new language unreachable.
+H.describe("where a user-added language is ranked", function()
+  local reg = require("kebab.registry")
+
+  local function with_project(fn)
+    local dir = H.tmpdir("ranked")
+    vim.fn.mkdir(dir .. "/.git", "p")
+    H.write(dir .. "/mything.toml", "")
+    fn(dir)
+  end
+
+  local LANG = {
+    key = "mylang",
+    label = "My Lang",
+    kind = "mything",
+    markers = { { file = "mything.toml", kind = "mything" } },
+  }
+
+  H.it("ranks a vim.g language before generic", function()
+    with_project(function(dir)
+      local saved = vim.g.kebab_languages
+      vim.g.kebab_languages = { LANG }
+      reg.reset()
+      local keys = reg.keys()
+      H.eq("generic", keys[#keys], "generic has to stay last: " .. table.concat(keys, ","))
+      H.eq("mything", reg.kind_of(dir), "generic's .git marker would otherwise win")
+      vim.g.kebab_languages = saved
+      reg.reset()
+    end)
+  end)
+
+  H.it("ranks a registered language before generic", function()
+    with_project(function(dir)
+      reg.reset()
+      reg.register(vim.deepcopy(LANG))
+      local keys = reg.keys()
+      H.eq("generic", keys[#keys], "generic has to stay last: " .. table.concat(keys, ","))
+      H.eq("mything", reg.kind_of(dir))
+      reg.reset()
+    end)
+  end)
+
+  H.it("survives a project type with no key", function()
+    local saved = vim.g.kebab_languages
+    vim.g.kebab_languages = { { key = "broken", label = "B", project_types = { { label = "no key" } } } }
+    reg.reset()
+    local ok, err = pcall(reg.project_types)
+    vim.g.kebab_languages = saved
+    reg.reset()
+    H.ok(ok, "one keyless type must not take down every caller: " .. tostring(err))
+  end)
+
+  H.it("reports a kebab_languages function that errors", function()
+    local saved = vim.g.kebab_languages
+    vim.g.kebab_languages = function()
+      error("boom")
+    end
+    local notes = H.capture_notify(function()
+      reg.reset()
+      reg.languages()
+    end)
+    vim.g.kebab_languages = saved
+    reg.reset()
+    H.ok(H.notified(notes, "kebab_languages failed"), "silently dropping the whole config is worse: " .. vim.inspect(notes))
+  end)
+end)

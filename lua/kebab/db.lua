@@ -51,7 +51,7 @@ function M.connections()
   -- An object keyed by name is the obvious thing to try when hand-editing,
   -- and it is a table -- so it has to be rejected by shape, not by type, or
   -- every saved connection silently reads back as zero.
-  if type(list) ~= "table" or not vim.islist(list) then
+  if not require("kebab.jsonfile").is_array(list) then
     return {}, path .. ' should have a "connections" list'
   end
   local out = {}
@@ -105,19 +105,7 @@ function M.save(connections)
   local path = M.store_path()
   vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
   local encoded = vim.json.encode({ connections = connections })
-  local pretty = { encoded }
-  -- jq only pretty-prints; it is not required. vim.fn.system raises E475 for a
-  -- missing executable rather than setting v:shell_error, so check first.
-  if vim.fn.executable("jq") == 1 then
-    local ran, out = pcall(vim.fn.system, { "jq", "." }, encoded)
-    if ran and vim.v.shell_error == 0 and vim.trim(out) ~= "" then
-      pretty = vim.split(out, "\n")
-    end
-  end
-  while #pretty > 0 and pretty[#pretty] == "" do
-    table.remove(pretty)
-  end
-  vim.fn.writefile(pretty, path)
+  vim.fn.writefile(require("kebab.jsonfile").pretty(encoded), path)
   -- a connections file may hold a username; keep it to the owner
   pcall(vim.uv.fs_chmod, path, 384) -- 0600
   return true

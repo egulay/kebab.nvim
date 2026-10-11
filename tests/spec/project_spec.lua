@@ -475,3 +475,66 @@ H.describe("scaffolding into the current directory", function()
     H.eq("mine", H.read(dir .. "/keep.txt"))
   end)
 end)
+
+-- Every one of these left the caller with no answer at all, which is a hang
+-- rather than a failure for `kebab new --no-open`.
+H.describe("project.create always answers", function()
+  local P = require("kebab.project")
+
+  local function create(spec)
+    local answered, ok, err = false, nil, nil
+    spec.open = false
+    spec.type = spec.type or "empty"
+    P.create(spec, function(o, e)
+      answered, ok, err = true, o, e
+    end)
+    H.wait(60000, function()
+      return answered
+    end, "create should always call done")
+    return ok, err
+  end
+
+  H.it("refuses a destination that is not a directory", function()
+    local dir = H.tmpdir("create-file")
+    H.write(dir .. "/afile", "x")
+    -- readdir() on a file returns an empty list, so this looked empty and the
+    -- scaffold threw later instead
+    local ok, err = create({ name = "a", dest = dir .. "/afile" })
+    H.falsy(ok)
+    H.matches("Not a directory", err)
+  end)
+
+  H.it("refuses a non-empty directory unless the caller allows it", function()
+    local dir = H.tmpdir("create-nonempty")
+    H.write(dir .. "/existing.txt", "x")
+    local ok, err = create({ name = "a", dest = dir })
+    H.falsy(ok)
+    H.matches("not empty", err)
+
+    -- :IdeInitHere asks the user and then passes this, so its "Scaffold into
+    -- it anyway?" confirmation leads somewhere
+    local ok2, err2 = create({ name = "a", dest = dir, allow_non_empty = true })
+    H.ok(ok2, tostring(err2))
+  end)
+
+  H.it("answers when a build throws instead of hanging", function()
+    local reg = require("kebab.registry")
+    reg.register({
+      key = "throwlang",
+      label = "Throws",
+      project_types = {
+        {
+          key = "throws",
+          label = "Throws",
+          build = function()
+            error("kaboom")
+          end,
+        },
+      },
+    })
+    local ok, err = create({ name = "a", type = "throws", dest = H.tmpdir("create-throw") .. "/new" })
+    reg.reset()
+    H.falsy(ok)
+    H.matches("kaboom", err, "the reason has to reach the caller: " .. tostring(err))
+  end)
+end)

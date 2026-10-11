@@ -62,6 +62,7 @@ lua/kebab/
 ├── agent.lua            their CLI contract: rendering, JSON, exit codes
 ├── git.lua              the hand-rolled revert, testable without a tree window
 ├── path.lua             expand a path WITHOUT vim.fn.expand's shell expansion
+├── jsonfile.lua         pretty-print JSON for a hand-editable file; jq optional
 ├── menus/
 │   ├── action.lua       introspectable menu actions -- build every entry here
 │   ├── editor.lua       right-click: Project/File/Edit/Code/Run/Git/View
@@ -246,6 +247,19 @@ client attached, file contents reverted.
   warning prefixes the payload and makes it unparseable.
 - `string.gsub`'s *replacement* treats `%` as an escape, so substituting a user
   path into a template eats characters. Pass a **function** as the replacement.
+- `vim.fn.readdir()` on a file, or on a directory it cannot read, returns an
+  **empty list** and only echoes E484 -- so "exists and is not empty" quietly
+  answers "empty". Check `fs_stat().type` first and `pcall` the readdir.
+- Any async entry point must answer **even when it throws**: `project.create`
+  wraps `type_def.build` in `pcall` because `done` is how `kebab new --no-open`
+  learns the outcome, and an unhandled error there hung headless Neovim forever.
+- `vim.islist()`, not `type(x) == "table"`, is the check for a JSON array: an
+  object decodes to a table too, so `{"configurations": {...}}` read back as
+  zero entries instead of being reported. `kebab.jsonfile.is_array` does both.
+- **`generic` must stay last** in the language list -- its `.git` marker matches
+  every repository. A language appended by `vim.g.kebab_languages` or
+  `registry.register` landed *after* it, so `kind_of()` answered "dir" for the
+  very projects that language owned. Both paths now insert before it.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.

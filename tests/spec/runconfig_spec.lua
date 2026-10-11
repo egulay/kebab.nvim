@@ -399,3 +399,41 @@ H.describe("the run configuration commands", function()
     end
   end)
 end)
+
+H.describe("run.json when jq is not installed", function()
+  local R = require("kebab.runconfig")
+
+  -- jq is optional (it only pretty-prints), but vim.fn.system raises E475 for
+  -- a missing executable rather than setting v:shell_error -- so the fallback
+  -- was unreachable and save() threw, losing what the user had just typed.
+  H.it("still writes the file", function()
+    local root = H.tmpdir("rc-nojq")
+    local saved = vim.env.PATH
+    vim.env.PATH = "/nonexistent"
+    local ok, err = pcall(R.save, root, { { name = "api", cmd = { "./mvnw" }, args = { "spring-boot:run" } } })
+    vim.env.PATH = saved
+    H.ok(ok, "save should not throw: " .. tostring(err))
+    local list, lerr = R.load(root)
+    H.eq(1, #list, tostring(lerr))
+    H.eq("api", list[1].name)
+  end)
+
+  H.it("reports a configurations object instead of reading it as empty", function()
+    local root = H.tmpdir("rc-object")
+    vim.fn.mkdir(root .. "/.kebab", "p")
+    H.write(root .. "/.kebab/run.json", '{"configurations":{"name":"api","cmd":["echo"]}}')
+    local list, err = R.load(root)
+    H.eq(0, #list)
+    H.matches("should be a list", err, "a single-configuration object is a natural slip")
+  end)
+
+  H.it("rejects a desc overseer would choke on", function()
+    -- overseer drops the whole template definition for a non-string desc, with
+    -- only a log line, so the configuration was runnable by name and invisible
+    -- in the picker. JSON null decodes to vim.NIL, which is truthy.
+    H.falsy(R.validate({ name = "a", cmd = { "x" }, desc = vim.NIL }))
+    H.falsy(R.validate({ name = "a", cmd = { "x" }, desc = 5 }))
+    H.ok(R.validate({ name = "a", cmd = { "x" }, desc = "fine" }))
+    H.ok(R.validate({ name = "a", cmd = { "x" } }))
+  end)
+end)

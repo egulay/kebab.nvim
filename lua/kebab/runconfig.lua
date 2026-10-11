@@ -96,6 +96,13 @@ function M.validate(config, index)
   if config.cwd ~= nil and type(config.cwd) ~= "string" then
     return false, where .. " cwd should be a string"
   end
+  -- desc goes straight to overseer, which rejects the template definition for
+  -- a non-string and drops it from the picker with only a log line -- so the
+  -- configuration would be runnable by name and invisible in <leader>oo. JSON
+  -- null decodes to vim.NIL, which is truthy, so `~= nil` is not enough.
+  if config.desc ~= nil and type(config.desc) ~= "string" then
+    return false, where .. " desc should be a string"
+  end
   return true
 end
 
@@ -135,7 +142,7 @@ function M.load(root)
   if list == nil then
     return {}, M.FILE .. ' should have a "configurations" list'
   end
-  if type(list) ~= "table" then
+  if not require("kebab.jsonfile").is_array(list) then
     return {}, M.FILE .. ' "configurations" should be a list'
   end
 
@@ -164,16 +171,7 @@ function M.save(root, configs)
   local path = M.file(root)
   vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
   local encoded = vim.json.encode({ configurations = configs })
-  -- vim.json.encode emits one line; a committed file wants to be readable.
-  local pretty = vim.split(vim.fn.system({ "jq", "." }, encoded), "\n")
-  if vim.v.shell_error ~= 0 then
-    pretty = { encoded }
-  end
-  -- drop a trailing blank produced by the split
-  while #pretty > 0 and pretty[#pretty] == "" do
-    table.remove(pretty)
-  end
-  vim.fn.writefile(pretty, path)
+  vim.fn.writefile(require("kebab.jsonfile").pretty(encoded), path)
   return true
 end
 
