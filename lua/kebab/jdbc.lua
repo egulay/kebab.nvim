@@ -485,6 +485,19 @@ function M.vim_command(url, mode)
   if not argv then
     return { ok = false, err = err or "unknown error" }
   end
+  -- dadbod spawns this argv itself, with Neovim's own environment, so the
+  -- credentials every other path passes through `env = credentials_env(url)`
+  -- never reached it: :DB and dadbod-completion failed to authenticate while
+  -- :IdeDbPing and :IdeDbTables worked.
+  --
+  -- They go into Neovim's environment, not into argv: argv is visible in the
+  -- process list, and a file on disk is the thing this layer refuses to do. It
+  -- is not a new exposure -- the value is already in this process's
+  -- environment, which is where `password_env` is read from in the first
+  -- place; this only gives it the second name the JVM looks for.
+  for key, value in pairs(M.credentials_env(url) or {}) do
+    vim.env[key] = value
+  end
   return { ok = true, argv = argv }
 end
 

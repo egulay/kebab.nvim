@@ -296,10 +296,30 @@ function M.columns(c, table_name)
   return out
 end
 
+---Does this statement change the shape of the database?
+---@param sql string
+local function is_ddl(sql)
+  local head = (sql or ""):gsub("^%s*", ""):lower()
+  return head:match("^create") ~= nil
+    or head:match("^drop") ~= nil
+    or head:match("^alter") ~= nil
+    or head:match("^truncate") ~= nil
+    or head:match("^comment") ~= nil
+end
+
 ---Run SQL and return the output lines.
 function M.query(c, sql)
   publish_credentials(c)
-  return jdbc.run(c.url, "query", { stdin = sql, timeout = 300000 })
+  local lines, err = jdbc.run(c.url, "query", { stdin = sql, timeout = 300000 })
+  -- Creating a table from a console is the scratch-database workflow, and the
+  -- completion schema would otherwise keep answering from before it existed --
+  -- nothing else ever invalidated it.
+  if lines and is_ddl(sql) then
+    pcall(function()
+      require("kebab.dbcomplete").invalidate(c.url)
+    end)
+  end
+  return lines, err
 end
 
 ---How many rows a table preview shows. A database IDE pages; this just caps.

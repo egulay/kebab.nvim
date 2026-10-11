@@ -535,3 +535,157 @@ H.describe("the database commands", function()
     end)
   end)
 end)
+
+-- Every driver but SQLite reports a schema, so the catalog holds
+-- "public.customers" -- and the SQLite-only fixture hid what that did to
+-- completion.
+H.describe("completion on a schema-qualified catalog", function()
+  local C = require("kebab.dbcomplete")
+
+  local function catalog()
+    return C.parse_schema({
+      "public.customers\tid\tint4",
+      "public.customers\tfull_name\ttext",
+      "public.orders\tid\tint4",
+      "sales.invoices\tnumber\ttext",
+    })
+  end
+
+  local function labels(items)
+    local out = {}
+    for _, i in ipairs(items) do
+      out[#out + 1] = i.label
+    end
+    table.sort(out)
+    return out
+  end
+
+  H.it("matches a table by its leaf as well as its full name", function()
+    H.ok(C.name_matches("public.customers", "cust"), "typing `cust` must offer public.customers")
+    H.ok(C.name_matches("public.customers", "publ"), "and the qualified form still matches")
+    H.ok(C.name_matches("public.customers", ""), "an empty prefix matches everything")
+    H.falsy(C.name_matches("public.orders", "cust"))
+  end)
+
+  H.it("treats a schema qualifier as a schema, not a missing table", function()
+    local schema = catalog()
+    H.eq({ "customers" }, labels(C.tables_in_schema(schema, "public", "c")))
+    H.eq({ "customers", "orders" }, labels(C.tables_in_schema(schema, "public", "")))
+    H.eq({ "invoices" }, labels(C.tables_in_schema(schema, "sales", "")))
+    H.eq({}, labels(C.tables_in_schema(schema, "nosuch", "")))
+  end)
+
+  H.it("still resolves a table by its leaf for column completion", function()
+    local schema = catalog()
+    H.eq("public.customers", C.resolve_table(schema, "customers"))
+    H.eq("public.customers", C.resolve_table(schema, "public.customers"))
+  end)
+end)
+
+H.describe("aliases are per statement", function()
+  local C = require("kebab.dbcomplete")
+
+  -- One buffer-global, last-wins alias map meant appending a statement
+  -- silently changed what the statements above it completed to.
+  H.it("does not let a later statement rebind an earlier alias", function()
+    local text = "select c.name from customers c;\nselect c.total from charges c;"
+    local first = C.statement_at(text, 10)
+    local second = C.statement_at(text, #text - 5)
+    H.eq("customers", C.aliases(first)["c"], "the first statement's own alias")
+    H.eq("charges", C.aliases(second)["c"], "and the second's")
+    H.eq("charges", C.aliases(text)["c"], "whole-buffer resolution is last-wins, which is the bug")
+  end)
+
+  H.it("returns the whole text when there is no cursor to scope to", function()
+    local text = "select 1; select 2"
+    H.eq(text, C.statement_at(text))
+    H.eq("select 1", C.statement_at(text, 3))
+    H.matches("select 2", C.statement_at(text, #text))
+  end)
+end)
+
+H.describe("a schema load that fails", function()
+  local C = require("kebab.dbcomplete")
+  local jdbc = require("kebab.jdbc")
+
+  -- The load is synchronous and runs on the main loop -- a JDBC connect, and
+  -- on first use a curl and a javac. Not remembering a failure meant every
+  -- later keystroke in a .sql buffer re-ran the whole thing.
+  H.it("is remembered, so it is not retried on every keystroke", function()
+    local url = "jdbc:postgresql://nowhere.invalid:5432/x"
+    local calls = 0
+    local real = jdbc.run
+    jdbc.run = function()
+      calls = calls + 1
+      return nil, "connection refused"
+    end
+    C.invalidate()
+    local ok, err = pcall(function()
+      for _ = 1, 5 do
+        local schema, serr = C.schema(url)
+        H.falsy(schema)
+        H.matches("refused", serr)
+      end
+      H.eq(1, calls, "five asks should cost one load, not five")
+      H.ok(C.failing(url), "it should know it is failing")
+      H.falsy(C.loaded(url), "and not claim to be loaded")
+
+      -- and it does retry once the cooldown has run out
+      vim.g.kebab_db_schema_cooldown = 0
+      C.schema(url)
+      H.eq(2, calls, "the cooldown expiring should allow another attempt")
+    end)
+    vim.g.kebab_db_schema_cooldown = nil
+    jdbc.run = real
+    C.invalidate()
+    H.ok(ok, tostring(err))
+  end)
+
+  H.it("does not believe an empty schema forever", function()
+    local url = "jdbc:sqlite:/tmp/empty-for-now.sqlite"
+    local real = jdbc.run
+    jdbc.run = function()
+      return {}
+    end
+    C.invalidate()
+    local ok, err = pcall(function()
+      vim.g.kebab_db_schema_empty_ttl = 0
+      C.schema(url)
+      H.falsy(C.loaded(url), "an empty schema past its ttl should be re-asked")
+      vim.g.kebab_db_schema_empty_ttl = nil
+      C.invalidate()
+      C.schema(url)
+      H.ok(C.loaded(url), "within the ttl it is a real answer")
+    end)
+    vim.g.kebab_db_schema_empty_ttl = nil
+    jdbc.run = real
+    C.invalidate()
+    H.ok(ok, tostring(err))
+  end)
+
+  H.it("is cleared by DDL, so a table created from a console completes", function()
+    if vim.fn.executable("java") == 0 or vim.fn.executable("sqlite3") == 0 then
+      H.skip("a JDK and sqlite3 are needed")
+    end
+    local db = H.tmpdir("ddl-refresh") .. "/d.sqlite"
+    local res = vim.system({ "sqlite3", db }, { stdin = "create table a (x int);", text = true }):wait(30000)
+    H.eq(0, res.code, tostring(res.stderr))
+    local c = { name = "ddl", url = "jdbc:sqlite:" .. db }
+    C.invalidate()
+    local schema = C.schema(c.url)
+    H.ok(schema, "the first load should work")
+    H.ok(C.loaded(c.url))
+    H.ok(D.query(c, "create table b (y int)"), "DDL from the console")
+    H.falsy(C.loaded(c.url), "the cached schema must be dropped, or `b` never completes")
+    local again = C.schema(c.url)
+    H.ok(again, "and reload")
+    local found = false
+    for _, name in ipairs(again.order) do
+      if name:lower():find("b", 1, true) == 1 then
+        found = true
+      end
+    end
+    H.ok(found, "the new table should be there: " .. vim.inspect(again.order))
+    require("kebab.jdbc").shutdown(c.url)
+  end)
+end)

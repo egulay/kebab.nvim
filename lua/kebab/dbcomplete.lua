@@ -19,13 +19,22 @@ local SQL_FILETYPES = { sql = true, mysql = true, plsql = true }
 -- url -> { tables = { [name] = { {name, type}, ... } }, order = { name, ... } }
 local cache = {}
 
+-- url -> { at, err }. A failed load, remembered: without this every later
+-- completion request re-ran the whole blocking bootstrap -- a JDBC connect,
+-- and on first use a curl and a javac -- on the main loop, so an unreachable
+-- host turned every keystroke in a .sql buffer into a multi-minute freeze,
+-- with the error notified only once.
+local failures = {}
+
 ---Forget what was cached, for when the schema changes under you.
 ---@param url? string clears everything when omitted
 function M.invalidate(url)
   if url then
     cache[url] = nil
+    failures[url] = nil
   else
     cache = {}
+    failures = {}
   end
 end
 
@@ -47,24 +56,69 @@ function M.parse_schema(lines)
   return schema
 end
 
+---How long a failure is believed, and how long an empty schema is trusted.
+function M.cooldown_ms()
+  return tonumber(vim.g.kebab_db_schema_cooldown) or 60000
+end
+
+---An empty schema is a real answer for a fresh database, but a short-lived
+---one: the scratch workflow is to attach an empty file and then create tables
+---from the console.
+function M.empty_ttl_ms()
+  return tonumber(vim.g.kebab_db_schema_empty_ttl) or 15000
+end
+
+---`>=`, not `>`, so a ttl of 0 means "do not cache this at all" rather than
+---"cache it for the rest of this millisecond".
+local function expired(entry, ttl)
+  return entry == nil or (vim.uv.now() - entry.at) >= ttl
+end
+
 ---The schema for a URL, loading it if this is the first ask.
 ---@param url string
 ---@return table|nil schema, string|nil err
 function M.schema(url)
-  if cache[url] then
-    return cache[url]
+  local hit = cache[url]
+  if hit then
+    -- re-ask for an empty one occasionally; a populated one never changes
+    -- under us without something calling M.invalidate
+    if #hit.order > 0 or not expired(hit, M.empty_ttl_ms()) then
+      return hit
+    end
   end
+
+  local failed = failures[url]
+  if failed and not expired(failed, M.cooldown_ms()) then
+    -- Degrade to no completions, which is the stated behaviour, rather than
+    -- blocking the editor again.
+    return nil, failed.err
+  end
+
   local lines, err = jdbc.run(url, "schema", { timeout = 120000 })
   if not lines then
+    failures[url] = { at = vim.uv.now(), err = err }
     return nil, err
   end
-  cache[url] = M.parse_schema(lines)
+  failures[url] = nil
+  local parsed = M.parse_schema(lines)
+  parsed.at = vim.uv.now()
+  cache[url] = parsed
   return cache[url]
 end
 
 ---Is the schema for this URL already loaded?
 function M.loaded(url)
-  return cache[url] ~= nil
+  local hit = cache[url]
+  if hit == nil then
+    return false
+  end
+  return #hit.order > 0 or not expired(hit, M.empty_ttl_ms())
+end
+
+---True when the last attempt failed and the cooldown has not run out.
+function M.failing(url)
+  local failed = failures[url]
+  return failed ~= nil and not expired(failed, M.cooldown_ms())
 end
 
 -- --------------------------------------------------------------- parsing
@@ -106,6 +160,39 @@ function M.aliases(text)
     end
   end
   return out
+end
+
+---The statement containing byte offset `offset`, for alias resolution.
+---
+---Aliases are per statement. Resolving them from the whole buffer is last-wins,
+---so in
+---
+---    select c.name from customers c;
+---    select c.total from charges c;
+---
+---completing `c.` in the first statement offered charges' columns -- and
+---appending a statement silently changed what the ones above it completed to.
+---@param text string
+---@param offset? number byte offset of the cursor into `text`
+---@return string
+function M.statement_at(text, offset)
+  text = text or ""
+  if offset == nil then
+    return text
+  end
+  offset = math.max(0, math.min(offset, #text))
+  local from = 1
+  local to = #text
+  -- the last `;` before the cursor, and the first one after it
+  local i = text:find(";", 1, true)
+  while i and i <= offset do
+    from = i + 1
+    i = text:find(";", i + 1, true)
+  end
+  if i then
+    to = i - 1
+  end
+  return text:sub(from, to)
 end
 
 local KEYWORDS = {
@@ -158,6 +245,43 @@ end
 
 local KIND = { table = 7, column = 5 } -- Class, Field -- matches the LSP kinds
 
+---Does `name` (possibly "schema.table") start with `prefix`, by either part?
+---@param name string
+---@param prefix string
+function M.name_matches(name, prefix)
+  if prefix == "" then
+    return true
+  end
+  local p = prefix:lower()
+  local lowered = name:lower()
+  if lowered:find(p, 1, true) == 1 then
+    return true
+  end
+  local leaf = lowered:match("([^%.]+)$")
+  return leaf ~= nil and leaf:find(p, 1, true) == 1
+end
+
+---The tables under a schema name, as completion items.
+---@param schema table
+---@param schema_name string
+---@param prefix string
+function M.tables_in_schema(schema, schema_name, prefix)
+  local items = {}
+  local wanted = (schema_name or ""):lower()
+  for _, name in ipairs(schema.order) do
+    local head, leaf = name:match("^([^%.]+)%.(.+)$")
+    if head and head:lower() == wanted and (prefix == "" or leaf:lower():find(prefix:lower(), 1, true) == 1) then
+      items[#items + 1] = {
+        label = leaf,
+        kind = KIND.table,
+        detail = "table in " .. head,
+        documentation = name,
+      }
+    end
+  end
+  return items
+end
+
 ---Completion items for a position.
 ---@param url string
 ---@param line string text before the cursor
@@ -174,6 +298,12 @@ function M.items(url, line, buffer_text)
   if qualifier then
     local tbl = M.resolve_table(schema, qualifier, buffer_text)
     if not tbl then
+      -- `public.c` is not a table called "public": the qualifier may be a
+      -- schema, in which case the tables under it are what is wanted.
+      local under = M.tables_in_schema(schema, qualifier, prefix)
+      if #under > 0 then
+        return under
+      end
       return {}
     end
     for _, col in ipairs(schema.tables[tbl] or {}) do
@@ -192,7 +322,10 @@ function M.items(url, line, buffer_text)
   -- Unqualified: tables first, then every column, so an empty prefix still
   -- offers the table list -- which is the thing dadbod's source never does.
   for _, name in ipairs(schema.order) do
-    if prefix == "" or name:lower():find(prefix:lower(), 1, true) == 1 then
+    -- Match the leaf as well as the whole name. Every driver but SQLite
+    -- reports a schema, so `schema.order` holds "public.customers" -- and
+    -- matching only the full name meant typing `cust` offered no table at all.
+    if prefix == "" or M.name_matches(name, prefix) then
       items[#items + 1] = {
         label = name,
         kind = KIND.table,
@@ -244,7 +377,16 @@ function Source:get_completions(ctx, callback)
   end
 
   local line = (ctx.line or ""):sub(1, (ctx.cursor and ctx.cursor[2]) or #(ctx.line or ""))
-  local buffer_text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local buffer_text = table.concat(lines, "\n")
+  -- Only the statement the cursor is in: see M.statement_at.
+  if ctx.cursor then
+    local offset = 0
+    for i = 1, math.min(ctx.cursor[1] - 1, #lines) do
+      offset = offset + #lines[i] + 1
+    end
+    buffer_text = M.statement_at(buffer_text, offset + (ctx.cursor[2] or 0))
+  end
 
   local function answer()
     callback({
