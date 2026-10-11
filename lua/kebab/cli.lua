@@ -55,8 +55,13 @@ function M.open(query)
     if stat.type == "directory" then
       return project.open_dir(expanded)
     end
-    -- a file: open its project root, then the file itself
-    project.open_dir(vim.fn.fnamemodify(expanded, ":h"))
+    -- A file: open its project *root*, then the file itself. Its own
+    -- directory is not the root -- `kebab src/main/java/com/foo/App.java`
+    -- rooted the tree at com/foo, scoped <leader>ff to one package and hid the
+    -- ./mvnw the run configurations look for.
+    local dir = vim.fn.fnamemodify(expanded, ":h")
+    local _, marker = require("kebab.registry").find_project(dir)
+    project.open_dir(marker and vim.fn.fnamemodify(marker, ":h") or dir)
     return vim.cmd("edit " .. vim.fn.fnameescape(expanded))
   end
 
@@ -373,8 +378,13 @@ function M.toolchain_uses()
       cmd = ok and resolved or nil
     end
     if type(cmd) == "table" and type(cmd[1]) == "string" then
-      local exe = cmd[1]:gsub("^%./", "")
-      if exe ~= "" then
+      local exe = cmd[1]
+      -- A project-local wrapper is not a toolchain. `./mvnw` resolves because
+      -- it exists in this directory, and plugins/run.lua re-resolves it at run
+      -- time -- so reporting "mvnw not installed" (with no install hint, and
+      -- only when the doctor happens to be run from a project that has one)
+      -- told the user something was broken that works.
+      if not exe:match("^%./") and exe ~= "" then
         note(exe, "run configurations")
       end
     end
@@ -576,9 +586,19 @@ function M.doctor_lines(opts)
     lines[#lines + 1] = ("%d ok, nothing missing."):format(counts.ok)
   end
 
-  local manager = M.package_manager() or M.system_package_manager()
-  if counts.missing > 0 and manager then
-    lines[#lines + 1] = ("Install suggestions use %s, which is what this machine has."):format(manager)
+  -- Name every manager the hints above actually used. Naming only the first
+  -- one claimed "suggestions use mise" directly under `install: sudo pacman -S
+  -- jq`, and a reader went looking for a mise recipe that does not exist.
+  local managers = {}
+  for _, manager in ipairs({ M.package_manager(), M.system_package_manager() }) do
+    if manager and not vim.tbl_contains(managers, manager) then
+      managers[#managers + 1] = manager
+    end
+  end
+  if counts.missing > 0 and #managers > 0 then
+    lines[#lines + 1] = ("Install suggestions use %s, which is what this machine has."):format(
+      table.concat(managers, " and ")
+    )
   end
 
   return lines, ok
@@ -591,10 +611,20 @@ function M.doctor_buffer()
   local lines, ok = M.doctor_lines()
   vim.cmd("new")
   local buf = vim.api.nvim_get_current_buf()
-  vim.api.nvim_buf_set_name(buf, "kebab://doctor")
+  -- Scratch options first, and a name that is free. A second :IdeDoctor while
+  -- the first report was still on screen threw E95 out of nvim_buf_set_name --
+  -- leaving the user in a bare modifiable window with swap on, because none of
+  -- the options below had been applied yet.
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
+  local base = "kebab://doctor"
+  local name, n = base, 1
+  while vim.fn.bufexists(name) == 1 do
+    n = n + 1
+    name = ("%s#%d"):format(base, n)
+  end
+  pcall(vim.api.nvim_buf_set_name, buf, name)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false,
     vim.list_extend({ "kebab.nvim doctor", "" }, lines))
   vim.bo[buf].modifiable = false

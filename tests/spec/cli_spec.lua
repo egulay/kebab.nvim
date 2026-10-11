@@ -505,3 +505,89 @@ H.describe("the :IdeDoctor command", function()
     vim.cmd("bwipeout!")
   end)
 end)
+
+-- The existing tests gave false confidence on each of these: the file one used
+-- a file sitting directly in the project directory, where the parent happens to
+-- be the root, and the doctor one wiped its buffer before a second call could
+-- collide.
+H.describe("opening a file that is not at the top level", function()
+  H.it("roots the project at the marker, not at the file's own directory", function()
+    local root = H.tmpdir("nested")
+    vim.fn.mkdir(root .. "/proj/src/main/java/com/foo", "p")
+    H.write(root .. "/proj/pom.xml", "<project/>")
+    H.write(root .. "/proj/src/main/java/com/foo/App.java", "class App {}")
+
+    local saved = vim.fn.getcwd()
+    cli.open(root .. "/proj/src/main/java/com/foo/App.java")
+    local cwd = vim.fn.resolve(vim.fn.getcwd())
+    vim.cmd("cd " .. vim.fn.fnameescape(saved))
+    H.eq(
+      vim.fn.resolve(root .. "/proj"),
+      cwd,
+      "rooting at com/foo scopes the tree and grep to one package, and hides ./mvnw"
+    )
+    H.matches("App%.java", vim.api.nvim_buf_get_name(0), "and it should still open the file")
+    H.reset_editor()
+  end)
+end)
+
+H.describe("the doctor report", function()
+  H.it("does not call a project-local wrapper a missing toolchain", function()
+    local dir = H.tmpdir("wrapper")
+    H.write(dir .. "/pom.xml", "<project/>")
+    H.write(dir .. "/mvnw", "#!/bin/sh\n")
+    vim.fn.setfperm(dir .. "/mvnw", "rwxr-xr-x")
+    H.write(dir .. "/gradlew", "#!/bin/sh\n")
+    vim.fn.setfperm(dir .. "/gradlew", "rwxr-xr-x")
+
+    local saved = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(dir))
+    local lines = cli.doctor_lines()
+    vim.cmd("cd " .. vim.fn.fnameescape(saved))
+    local text = table.concat(lines, "\n")
+    -- ./mvnw resolves because it is in this directory, and plugins/run.lua
+    -- re-resolves it at run time -- so "mvnw not installed", with no install
+    -- hint, reported a problem that does not exist
+    H.falsy(text:find("mvnw"), "a wrapper is not a toolchain:\n" .. text)
+    H.falsy(text:find("gradlew"), "nor is gradlew")
+  end)
+
+  H.it("names every package manager whose hints it printed", function()
+    local lines = cli.doctor_lines()
+    local footer
+    for _, l in ipairs(lines) do
+      if l:find("Install suggestions use") then
+        footer = l
+      end
+    end
+    if not footer then
+      H.skip("nothing is missing on this machine, so there is no footer")
+    end
+    -- a hint of `sudo pacman -S jq` under "suggestions use mise" sent the
+    -- reader looking for a mise recipe that does not exist
+    local text = table.concat(lines, "\n")
+    for manager, pattern in pairs({ pacman = "sudo pacman", apt = "sudo apt", dnf = "sudo dnf" }) do
+      if text:find(pattern, 1, true) then
+        H.matches(manager, footer, "the footer should mention " .. manager .. ": " .. footer)
+      end
+    end
+    if text:find("mise use", 1, true) then
+      H.matches("mise", footer, "and mise: " .. footer)
+    end
+  end)
+
+  H.it("can be opened twice without throwing", function()
+    local ok1, err1 = pcall(cli.doctor_buffer)
+    H.ok(ok1, tostring(err1))
+    -- keep the first report on screen, as a user would
+    vim.cmd("split")
+    local ok2, err2 = pcall(cli.doctor_buffer)
+    H.ok(ok2, "a second report must not throw E95: " .. tostring(err2))
+    -- and whatever it lands in is a proper scratch buffer, not a bare one
+    H.eq("nofile", vim.bo.buftype)
+    H.falsy(vim.bo.modifiable, "a report should not be editable")
+    H.falsy(vim.bo.swapfile)
+    H.matches("kebab://doctor", vim.api.nvim_buf_get_name(0))
+    H.reset_editor()
+  end)
+end)
