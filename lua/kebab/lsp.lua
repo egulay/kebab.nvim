@@ -29,9 +29,62 @@ local function timeouts(opts)
   opts = opts or {}
   return {
     attach = opts.attach_timeout or 120000,
-    settle = opts.settle or 1500,
+    -- A cold gopls or jdtls does not publish within 1.5s, and an unsettled
+    -- result is reported as inconclusive rather than clean -- so this being
+    -- generous costs a slow answer, where being mean costs a wrong one.
+    settle = opts.settle or 5000,
+    -- how long the diagnostic set has to stop changing before it is believed
+    quiet = opts.quiet or 500,
     request = opts.request_timeout or 20000,
   }
+end
+
+---A diagnostic set, compared cheaply so "did it change" is answerable.
+---@param list table[]
+local function signature(list)
+  local parts = {}
+  for _, d in ipairs(list) do
+    parts[#parts + 1] = table.concat({
+      tostring(d.lnum),
+      tostring(d.col),
+      tostring(d.severity),
+      tostring(d.message or ""),
+    }, "\30")
+  end
+  table.sort(parts)
+  return table.concat(parts, "\31")
+end
+
+---Wait until the diagnostics for `bufnr` have stopped changing.
+---
+---A language server publishes what it knows early and refines it, so the first
+---set that arrives can be missing the diagnostic the caller came for.
+---@param bufnr number
+---@param first table[] the set already in hand
+---@param t table timeouts
+---@return table[] diagnostics
+function M.stable_diagnostics(bufnr, first, t)
+  local diags = first
+  local sig = signature(diags)
+  local stable_for = 0
+  local deadline = vim.uv.now() + (t.settle or 5000)
+  local step = 100
+  while vim.uv.now() < deadline do
+    vim.wait(step, function()
+      return false
+    end, 20)
+    local now = vim.diagnostic.get(bufnr)
+    local now_sig = signature(now)
+    if now_sig == sig then
+      stable_for = stable_for + step
+      if stable_for >= (t.quiet or 500) then
+        return now
+      end
+    else
+      diags, sig, stable_for = now, now_sig, 0
+    end
+  end
+  return vim.diagnostic.get(bufnr)
 end
 
 ---An argument turned into an absolute path.
@@ -104,12 +157,36 @@ function M.diagnostics(path, opts)
 
   -- Wait for diagnostics to arrive, but do not insist: a clean file never
   -- produces any.
-  local settled = vim.wait(t.settle, function()
-    return #vim.diagnostic.get(bufnr) > 0
-  end, 50)
+  --
+  -- Two races had to be closed here, both of which reported a file holding a
+  -- compile error as clean *and* settled -- the worst possible answer for a
+  -- gate. They showed up as a one-in-three flake in the suite.
+  --
+  --   1. The list was read twice: once in the wait predicate, once to build
+  --      the result. A server republishing a file clears the set and sets it
+  --      again, so the second read could land in the gap. The list is now
+  --      kept from the predicate.
+  --   2. The first publish is not the last. gopls announces what it has early
+  --      and refines it, so stopping at "non-empty" could return a set that
+  --      did not yet hold the compile error. So after the first publish, wait
+  --      for the set to stop changing.
+  local diags = vim.diagnostic.get(bufnr)
+  local settled = #diags > 0
+  if not settled then
+    settled = vim.wait(t.settle, function()
+      diags = vim.diagnostic.get(bufnr)
+      return #diags > 0
+    end, 50)
+  end
+  if settled then
+    diags = M.stable_diagnostics(bufnr, diags, t)
+  else
+    -- one last look, for the genuinely clean case
+    diags = vim.diagnostic.get(bufnr)
+  end
 
   local out = {}
-  for _, d in ipairs(vim.diagnostic.get(bufnr)) do
+  for _, d in ipairs(diags) do
     out[#out + 1] = {
       file = vim.api.nvim_buf_get_name(bufnr),
       line = d.lnum + 1,

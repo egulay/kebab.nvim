@@ -369,13 +369,66 @@ And it **never reloads a buffer that you have edited** — if the file also
 changed on disk, that is a conflict and it says so rather than discarding
 either side. `:IdeFollowStatus` reports what it has been doing.
 
+### The Ghost Mode indicator
+
+While following is on, a small animated panel appears by itself in the
+bottom-right corner:
+
+```
+                                              ╭──────────────────────────────╮
+                                              │  󰊠  Ghost Mode · Thing.java  │
+                                              ╰──────────────────────────────╯
+```
+
+The ghost drifts while it waits, names each file as it is followed, and falls
+back to a running change count once that name is a couple of seconds old. It is
+not focusable and has no mappings — it cannot take your cursor. It appears when
+following starts and goes away when it stops, including when following stops on
+its own.
+
 ```lua
 vim.g.kebab_follow = {
   debounce_ms = 250,     -- coalesce a burst; the latest change wins
   follow = "latest",     -- or "first", to stay put during a big refactor
   open_new = false,      -- open files that are not already in a buffer
 }
+
+vim.g.kebab_follow_indicator = false   -- no panel at all
+vim.g.kebab_follow_indicator = {       -- or tune it
+  interval_ms = 120,     -- animation speed
+  activity_ms = 2500,    -- how long a filename stays up
+  title = "Ghost Mode",
+}
+vim.g.kebab_follow_spinner = { "󰊠  ", " 󰊠 ", "  󰊠", " 󰊠 " }
 ```
+
+`follow.status()` returns the same thing as a plain string, for a statusline.
+
+## Running a shell command without leaving the editor
+
+`:` opens Vim's own command line, so it takes Ex commands — but `!` escapes to
+the shell, and that is the whole trick.
+
+| | |
+|---|---|
+| `:!ls -la` | run it, show the output, `Enter` to come back |
+| `:silent !cmd` | run it with no output and no prompt |
+| `:r !date` | *read* the output into the buffer at the cursor |
+| `:%!sort` | *filter* the whole buffer through a command |
+| `:.!bash` | run the current line as bash, replace it with the output |
+| `:'<,'>!jq .` | filter just the visual selection |
+| `:term htop` | open it in a real terminal buffer |
+| `<C-/>` or `<leader>ft` | floating terminal, at the project root |
+| `<leader>fT` | the same, in the current file's directory |
+
+`%` expands to the current file, so `:!python3 %` runs what you are looking at,
+and `:!kebab doctor` works because the command is on your PATH. Inside a
+terminal buffer, `<C-\><C-n>` returns you to normal mode so you can scroll and
+copy; `i` goes back to typing.
+
+For anything you run more than once, put it in `.kebab/run.json` instead
+(`<leader>or`) so it becomes a task with a name, output pane and exit code,
+rather than a line you retype.
 
 ## Asking the editor questions from a shell
 
@@ -389,9 +442,21 @@ Read-only, and meant for a script or an AI agent as much as for you.
 | `kebab symbols <file>` | the outline of a file |
 | `kebab hover <file>:<line>:<col>` | its type and docs |
 
-`--json` for a machine-readable answer. `--exit-code` makes `diagnostics` exit
-non-zero when it finds an error; by default the exit code says whether the
-*query* worked, not what it found.
+`--json` for a machine-readable answer. By default the exit code says whether
+the *query* worked, not what it found — finding errors is a successful query.
+
+`--exit-code` opts into the shape a pre-commit hook wants, and it has three
+outcomes rather than two, because "clean" and "the server never answered" must
+not look the same to a gate:
+
+| | |
+|---|---|
+| `0` | the file is clean, and the server said so |
+| `1` | an error-severity diagnostic was reported |
+| `2` | inconclusive — nothing was published within the settle window |
+
+A cold `jdtls` can take well over a minute, so for a gate either raise
+`--timeout`/settle or keep an instance warm with `kebab serve`.
 
 For more than the odd question, keep an instance warm — 250ms a query becomes
 15ms, and jdtls indexes once instead of per call:

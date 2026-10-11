@@ -23,7 +23,8 @@
 #   Semantic queries, for a caller that is not a person (an AI agent, a script).
 #   Read-only: none of these write to the working tree. Add --json for a
 #   machine-readable answer, and --exit-code to make `diagnostics` fail when it
-#   finds an error.
+#   finds an error (0 clean, 1 error found, 2 inconclusive -- nothing published
+#   within the settle window, so a gate must not read it as clean).
 #
 #   kebab diagnostics <file>            errors and warnings, from the language server
 #   kebab definition <file>:<line>:<col>    where that symbol is defined

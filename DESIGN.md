@@ -473,6 +473,17 @@ Watching is `vim._watch`'s inotify backend. Note what *not* to use:
 on Linux and then does not recurse**, so it silently watches only the top
 directory.
 
+A cursor that moves on its own is alarming unless it is explained, so
+`ghostbar.lua` puts an animated panel in the bottom-right corner for as long as
+following is on, naming each file as it is followed. It is deliberately inert --
+`focusable = false`, no mappings, no autocmds on the editor's own buffers -- and
+it is wired in through `pcall`, because a broken indicator must not be able to
+stop following from working. Two details worth keeping: the animation timer
+checks `follow.running()` on every tick, so the panel closes itself if following
+stops by any route; and `render()` refuses to open a window unless `show()` is
+in effect, so it cannot resurrect a panel that has been hidden (the first
+version could, and a test caught it).
+
 Most of the design is in what it refuses to do:
 
 - It never reloads over your own edits. A buffer that is modified *and* changed
@@ -585,7 +596,11 @@ Design decisions worth keeping:
   published yet are otherwise indistinguishable.
 - **The exit code reports whether the query worked**, not what it found.
   Finding errors is a successful query. `--exit-code` opts into failing on an
-  error, which is the shape a pre-commit hook wants.
+  error, which is the shape a pre-commit hook wants -- and it has a third
+  outcome, `2`, for an unsettled result. It used to exit `0` there, which made
+  the gate pass whenever the language server was cold: a pre-commit hook that
+  silently approves everything is worse than no hook. The suite caught this as
+  a flake before the review named it, for the same reason.
 
 ### Why the warm instance is Neovim's own, not ours
 

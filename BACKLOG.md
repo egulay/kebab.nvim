@@ -131,4 +131,5 @@ a formatter -- which on reflection is the feature rather than a flaw.
   also as an Omarchy integration. An *Omarchy plugin* is a Quickshell/bar
   artifact, which this is not — at most it would be an install script plus
   theme awareness.
-- Nothing is published yet: `github.com/egulay/kebab.nvim` is still available.
+- `setup.sh` installs it from a clone: the lazy spec, the `kebab` command on
+  PATH, then `kebab doctor`. Published under gulay.io.

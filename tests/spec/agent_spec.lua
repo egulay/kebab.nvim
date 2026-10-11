@@ -43,6 +43,16 @@ local function fixture()
     "\tvar unused int",
     "}",
   }, "\n"))
+  -- A second file with nothing wrong with it, so "exit 0" can be shown to mean
+  -- "the server reported a clean file" rather than "the server said nothing".
+  H.write(dir .. "/clean/clean.go", table.concat({
+    "package clean",
+    "",
+    "// Twice doubles n.",
+    "func Twice(n int) int {",
+    "\treturn n * 2",
+    "}",
+  }, "\n"))
   fixture_dir = dir
   return dir
 end
@@ -279,9 +289,67 @@ H.describe("the CLI contract", function()
     requires_go()
     in_fixture(function()
       local _, plain = agent.report("diagnostics", { "main.go" }, {})
-      local _, gated = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      -- A generous settle window on purpose: with a short one this asserted
+      -- the *flake* rather than the behaviour -- a cold gopls publishes
+      -- nothing in 1.5s, the result came back empty, and the gate exited 0.
+      local _, gated = agent.report("diagnostics", { "main.go" }, { exit_code = true, settle = 30000 })
       H.eq(0, plain)
       H.eq(1, gated, "the pre-commit-check shape")
+    end)
+  end)
+
+  -- "clean" and "the server never answered" must not look the same to a gate.
+  -- Driven off a stubbed result rather than a real server: racing a cold gopls
+  -- is what made the test above assert the flake instead of the behaviour.
+  H.it("exits 2 when it could not determine, rather than 0", function()
+    local lsp = require("kebab.lsp")
+    local real = lsp.diagnostics
+    local function stub(settled, diags)
+      lsp.diagnostics = function()
+        return {
+          file = "/p/main.go",
+          clients = { "gopls" },
+          settled = settled,
+          count = #diags,
+          diagnostics = diags,
+        }
+      end
+    end
+
+    local ok, err = pcall(function()
+      stub(false, {})
+      local output, code = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      H.eq(2, code, "an unsettled, empty result is inconclusive -- not clean")
+      H.matches("had not published anything yet", output, "and it has to say so: " .. output)
+
+      stub(true, {})
+      local _, clean = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      H.eq(0, clean, "a settled, empty result is a genuine pass")
+
+      stub(false, { { file = "/p/main.go", line = 1, col = 1, severity = "error", message = "boom" } })
+      local _, found = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      H.eq(1, found, "an error outranks being unsettled")
+
+      -- settled = true, because a server that published a warning has
+      -- published: lsp.diagnostics sets `settled or #out > 0` for exactly this
+      stub(true, { { file = "/p/main.go", line = 1, col = 1, severity = "warning", message = "meh" } })
+      local _, warned = agent.report("diagnostics", { "main.go" }, { exit_code = true })
+      H.eq(0, warned, "a warning is not an error, so it is not a failure")
+
+      -- and without --exit-code none of this changes the code
+      stub(false, {})
+      local _, ungated = agent.report("diagnostics", { "main.go" }, {})
+      H.eq(0, ungated, "the plain report still only says whether the query worked")
+    end)
+    lsp.diagnostics = real
+    H.ok(ok, tostring(err))
+  end)
+
+  H.it("still exits 0 for a file that is genuinely clean", function()
+    requires_go()
+    in_fixture(function()
+      local _, code = agent.report("diagnostics", { "clean/clean.go" }, { exit_code = true, settle = 30000 })
+      H.eq(0, code, "a clean file the server reported on is a pass")
     end)
   end)
 

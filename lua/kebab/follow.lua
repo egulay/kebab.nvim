@@ -272,7 +272,14 @@ local function flush()
   end
 
   local chosen = cfg.follow == "first" and paths[1] or paths[#paths]
-  pcall(M.follow_file, chosen, { cfg = cfg })
+  local ok, line = pcall(M.follow_file, chosen, { cfg = cfg })
+  -- Name the file on the indicator, so the panel says what just moved rather
+  -- than only that something did.
+  if ok and line then
+    pcall(function()
+      require("kebab.ghostbar").activity(chosen)
+    end)
+  end
 end
 
 ---Record a change, to be acted on after the debounce window.
@@ -330,6 +337,12 @@ function M.start(root)
   STATE.stop_fn = type(stop_or_err) == "function" and stop_or_err or nil
   STATE.root = root
   STATE.count = 0
+  -- Something else is about to move the cursor on its own, so say so without
+  -- being asked. Optional on purpose: a broken indicator must not stop
+  -- following from working.
+  pcall(function()
+    require("kebab.ghostbar").show()
+  end)
   return true
 end
 
@@ -350,6 +363,9 @@ function M.stop()
   STATE.running = false
   STATE.stop_fn = nil
   STATE.pending = {}
+  pcall(function()
+    require("kebab.ghostbar").hide()
+  end)
   return true
 end
 

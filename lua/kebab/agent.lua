@@ -115,7 +115,14 @@ end
 ---The exit code reports whether the *query* worked, not what it found -- an
 ---agent asking "are there errors" wants the answer in the output, not a crash.
 ---`--exit-code` opts into failing on an error-severity diagnostic, which is the
----shape a pre-commit check wants.
+---shape a pre-commit check wants. It has three outcomes, because "clean" and
+---"the server never answered" must not look the same to a gate:
+---
+---  0  the file is clean, and the server said so
+---  1  an error-severity diagnostic was reported
+---  2  inconclusive -- nothing was published within the settle window
+---
+---Without `--exit-code` the code still only reports whether the *query* worked.
 ---@return string output, number code
 function M.report(command, args, opts)
   opts = opts or {}
@@ -134,6 +141,12 @@ function M.report(command, args, opts)
         code = 1
         break
       end
+    end
+    -- A gate must not read "nothing published yet" as "nothing wrong". This is
+    -- the difference between a pre-commit hook that works and one that passes
+    -- whenever the language server is cold.
+    if code == 0 and not result.settled then
+      code = 2
     end
   end
 

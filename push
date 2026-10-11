@@ -10,8 +10,11 @@
 
 set -euo pipefail
 
-REMOTE_URL="https://github.com/egulay/kebab.nvim.git"
 REMOTE_NAME="origin"
+# Read from the clone rather than hardcoded, so the owner/repo lives in exactly
+# one place -- git's own config -- and not in a file that gets published.
+REMOTE_URL=$(git remote get-url "$REMOTE_NAME" 2>/dev/null || true)
+REMOTE_URL=${REMOTE_URL:-${KEBAB_REMOTE_URL:-}}
 
 RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; BOLD=$'\e[1m'; OFF=$'\e[0m'
 say()  { printf '%s%s%s\n' "$BOLD" "$*" "$OFF"; }
@@ -49,7 +52,8 @@ if ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
   fi
 else
   current="$(git remote get-url "$REMOTE_NAME")"
-  if [[ "$current" != "$REMOTE_URL" && "$current" != "git@github.com:egulay/kebab.nvim.git" ]]; then
+  ssh_form=${REMOTE_URL/https:\/\/github.com\//git@github.com:}
+  if [[ -n "$REMOTE_URL" && "$current" != "$REMOTE_URL" && "$current" != "$ssh_form" ]]; then
     die "remote $REMOTE_NAME is $current, expected $REMOTE_URL
      fix it with: git remote set-url $REMOTE_NAME $REMOTE_URL"
   fi
@@ -70,7 +74,7 @@ if [[ "$EFFECTIVE_URL" == https://* ]]; then
     else
       warn "no credential.helper and no gh; the push may prompt or fail.
      Either install gh, or switch to ssh:
-       git remote set-url $REMOTE_NAME git@github.com:egulay/kebab.nvim.git"
+       git remote set-url $REMOTE_NAME ${REMOTE_URL/https:\/\/github.com\//git@github.com:}"
     fi
   fi
 fi
@@ -181,4 +185,4 @@ else
        git rebase --abort"
   fi
 fi
-echo "   https://github.com/egulay/kebab.nvim/tree/$BRANCH"
+echo "   ${REMOTE_URL%.git}/tree/$BRANCH"

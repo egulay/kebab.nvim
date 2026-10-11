@@ -87,36 +87,50 @@ they are.
 
 ## Install
 
-Add one spec to your LazyVim config:
+Clone it, then run the installer from the clone:
+
+```bash
+git clone <this repo> ~/Projects/kebab.nvim
+cd ~/Projects/kebab.nvim
+./setup.sh
+```
+
+It registers the layer with lazy.nvim, puts the `kebab` command on your PATH,
+and finishes by running `kebab doctor` so you learn what is missing now rather
+than the first time you open a project. Nothing is overwritten without asking,
+running it twice changes nothing, and `./setup.sh --dry-run` prints every action
+instead of taking it.
+
+Requires Neovim 0.11 or newer and an existing
+[LazyVim](https://lazyvim.github.io) config.
+
+Restart Neovim afterwards. Mason installs the tooling on first launch; `jdtls`
+takes about a minute to index a Maven project the first time.
+
+### Doing it by hand
+
+The spec `setup.sh` writes is a local one, pointing at your clone — so the layer
+is yours to edit and lazy never tries to fetch it:
 
 ```lua
 -- ~/.config/nvim/lua/plugins/kebab.lua
 return {
-  { "egulay/kebab.nvim", import = "kebab.plugins" },
+  {
+    dir = "~/Projects/kebab.nvim",
+    name = "kebab.nvim",
+    import = "kebab.plugins",
+  },
 }
 ```
 
-Restart Neovim. Mason installs the tooling on first launch; `jdtls` takes about
-a minute to index a Maven project the first time.
-
-### Local development
-
-```lua
--- ~/.config/nvim/lua/config/lazy.lua
-dev = { path = "~/Projects", fallback = true },
-```
-
-```lua
--- ~/.config/nvim/lua/plugins/kebab.lua
-return { { "egulay/kebab.nvim", dev = true, import = "kebab.plugins" } }
-```
-
-Clone to `~/Projects/kebab.nvim` and edits apply on the next start.
+`import = "kebab.plugins"` loads every module under `lua/kebab/plugins/`, so
+anything added there is picked up automatically.
 
 ## The `kebab` command
 
 `bin/kebab` opens and creates projects from the shell, so the IDE starts the way
-`code .` does rather than only from inside Neovim.
+`code .` does rather than only from inside Neovim. `setup.sh` links it for you;
+by hand it is:
 
 ```bash
 ln -s ~/Projects/kebab.nvim/bin/kebab ~/.local/bin/kebab
@@ -263,7 +277,10 @@ kebab diagnostics src/Main.java --json
 ```
 
 The exit code says whether the *query* worked, not what it found. Finding errors
-is a successful query; `--exit-code` opts into the other behaviour.
+is a successful query; `--exit-code` opts into the other behaviour, with `0` for
+a clean file the server reported on, `1` for an error, and `2` for inconclusive
+— nothing published yet. That third code is the point: a gate that cannot tell
+"clean" from "the language server was still cold" passes whenever it is slow.
 
 ### Keeping it warm
 

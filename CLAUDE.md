@@ -1,24 +1,26 @@
 # kebab.nvim — working notes for Claude
 
 A Neovim-based lightweight IDE layer for LazyVim, aiming at full graphical-IDE
-parity for the stacks its author actually uses. Personal project under gulay.io
-(github.com/egulay). **Not** related to any of the author's client work.
+parity for the stacks its author actually uses. Personal project under
+**gulay.io**. **Not** related to any of the author's client work.
 
 Read `DESIGN.md` for why each module exists, `CHEATSHEET.md` for the keymaps,
 `BACKLOG.md` for what is deliberately unfinished.
 
 ## How it is loaded
 
-The repo is **not** copied into `~/.config/nvim`. The live config points at it
-with lazy.nvim's dev mode, so edits here apply on the next Neovim start:
+The repo is **not** copied into `~/.config/nvim`. The live config points at the
+clone, so edits here apply on the next Neovim start:
 
 ```lua
--- ~/.config/nvim/lua/config/lazy.lua
-dev = { path = "~/Projects", fallback = true },
-
 -- ~/.config/nvim/lua/plugins/kebab.lua   (the only file in the user config)
-return { { "egulay/kebab.nvim", dev = true, import = "kebab.plugins" } }
+return { { dir = "~/Projects/kebab.nvim", name = "kebab.nvim", import = "kebab.plugins" } }
 ```
+
+A local `dir` spec, which is what `setup.sh` writes -- no owner/repo, so lazy
+never tries to fetch it and the clone is the source of truth. (It used to use
+lazy's `dev` mode with an owner/repo; a plain `dir` is simpler and keeps the
+handle out of the published docs.)
 
 `import = "kebab.plugins"` makes lazy load every module under
 `lua/kebab/plugins/`. Anything added there is picked up automatically.
@@ -50,6 +52,7 @@ lua/kebab/
 ├── maven.lua            pom reading/editing, pure + heavily tested
 ├── gradle.lua           build.gradle[.kts] editing, both dialects
 ├── follow.lua           :IdeFollow -- follow edits made outside the editor
+├── ghostbar.lua         the animated Ghost Mode panel follow.lua turns on
 ├── codegen.lua          :IdeGenerate (jdtls source actions, named)
 ├── templates.lua        :IdeNewFile (package line from the directory)
 ├── scratch.lua          :IdeScratch (real files under stdpath("data"))
@@ -263,6 +266,23 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- **`vim.diagnostic.get()` must be read once, not twice.** Reading it in a
+  `vim.wait` predicate and again to build the result is a race: a server
+  republishing clears the set and sets it again, and the second read can land
+  in the gap -- reporting a file with a compile error as clean *and* settled.
+- **The first publish is not the last.** gopls announces what it has early and
+  refines it, so stopping at "non-empty" can return a set that does not yet
+  hold the compile error. `lsp.stable_diagnostics` waits for the set to stop
+  changing for `quiet` ms (500 default) inside the settle budget. Together with
+  the double-read above, this was a one-in-three suite flake, and the same bug
+  made `--exit-code` a gate that passes whenever the server is cold.
+- `--exit-code` has **three** outcomes: 0 clean (and the server said so), 1 an
+  error, 2 inconclusive. A gate that cannot tell "clean" from "nothing
+  published yet" silently approves everything.
+- **Nothing may observe `vim.notify` before `H.install_notify_baseline()`** --
+  not even a wrapper that chains through to LazyVim's stand-in. Chaining hits
+  the same replay-feeds-itself loop as capture/restore: measured 18s with the
+  baseline, still running after 120s with a chained wrapper.
 - `handle:kill()` then `handle:close()` in the same tick drops the pid from
   libuv's queue before SIGCHLD, so the child is **never waitpid'd** and stays
   `<defunct>`. Close the handle in the exit callback, which is also the only

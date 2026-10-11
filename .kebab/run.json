@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "name": "tests",
+      "desc": "the whole suite, from the real user config",
+      "cmd": ["./tests/run.sh"]
+    },
+    {
+      "name": "tests (filtered)",
+      "desc": "one spec: edit the arg, or copy this entry",
+      "cmd": ["./tests/run.sh"],
+      "args": ["git"]
+    },
+    {
+      "name": "doctor",
+      "desc": "what is installed and what is missing",
+      "cmd": ["./bin/kebab"],
+      "args": ["doctor"]
+    },
+    {
+      "name": "setup (dry run)",
+      "desc": "what the installer would do, without doing it",
+      "cmd": ["./setup.sh"],
+      "args": ["--dry-run"]
+    }
+  ]
+}
