@@ -233,6 +233,31 @@ Two entry points, because developers expect both:
 by kind. New projects default to `~/Projects` — note the capital P, which is
 where this user keeps new work.
 
+It scans **two levels**, because the layout it kept missing is a root with a
+grouping directory in it (`~/Projects/work/<project>`): the group carries no
+marker of its own, so a one-level scan treated it as a dead end. Going deeper
+needs three guards, and the scan has all three — a directory that is itself a
+project is recorded and *not* descended into (a checkout with a vendored
+dependency tree is one project, not a hundred), `node_modules`, `target`,
+`build`, `dist` and friends are never walked, and the whole scan has a budget
+of 2000 directories. Depth and budget are `vim.g.kebab_project_depth` and
+`vim.g.kebab_project_scan_limit`; depth 1 is the old behaviour. A hidden
+directory can *be* a project (`~/Projects/.dotfiles`) but is never walked
+through to reach one. Measured on this machine: 11 projects in 2.2 ms.
+
+A nested project is offered by its path below the root (`group/alpha-api`)
+while `name` stays the basename, so `kebab open alpha-api` still matches and
+the picker can still say which of two same-named checkouts it means.
+
+`discover()` returns **what it could not read** as a second value. It used to
+be a bare `if fd then`, which meant an unreadable root, or one the user named
+in `vim.g.kebab_project_roots` that no longer exists, looked exactly like a
+root with no projects in it — the single most confusing way for the feature to
+fail. The picker warns, `kebab list` prints a `skipped` line, and `kebab
+doctor` has a "project roots readable" check. A missing *default* root is not
+reported: the defaults deliberately name roots most machines do not have, and
+warning about those trains you to ignore the warning.
+
 Scaffolding is split in two. `M.create()` takes every answer up front and
 prompts for nothing; `M.new_project()` is the wizard that collects those answers
 through `vim.ui` and calls it. Before the split there was only the wizard, so

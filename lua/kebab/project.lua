@@ -60,31 +60,176 @@ local function is_dir(path, scandir_type)
   return stat ~= nil and stat.type == "directory"
 end
 
+---Where the root list came from: "g" (vim.g.kebab_project_roots), "env"
+---($KEBAB_PROJECT_ROOTS) or "default".
+---
+---Worth distinguishing because the defaults deliberately name roots most
+---machines do not have -- ~/src on a box that never ran that IDE --
+---so a missing default is not a problem, while a missing root the user asked
+---for by name is.
+---@return "g"|"env"|"default"
+function M.roots_source()
+  if type(vim.g.kebab_project_roots) == "table" then
+    return "g"
+  end
+  local env = vim.env.KEBAB_PROJECT_ROOTS
+  if env and env ~= "" then
+    return "env"
+  end
+  return "default"
+end
+
+-- Directories not worth descending into: they are large, and a project you
+-- would open from the welcome screen is never inside one. Without this list a
+-- depth of 2 walks into node_modules.
+local SKIP_DIRS = {
+  [".dart_tool"] = true,
+  [".gradle"] = true,
+  [".next"] = true,
+  [".svelte-kit"] = true,
+  [".terraform"] = true,
+  ["Pods"] = true,
+  ["__pycache__"] = true,
+  ["build"] = true,
+  ["dist"] = true,
+  ["node_modules"] = true,
+  ["target"] = true,
+  ["vendor"] = true,
+  ["venv"] = true,
+}
+
+-- Two levels, because the one layout that discovery kept missing is a root
+-- with a grouping directory in it (~/Projects/work/<project>). Deeper than
+-- that and the scan is walking the user's whole home for no gain.
+local DEFAULT_DEPTH = 2
+-- A budget, not a guess: a wrong root (`$HOME`) or a grouping directory full
+-- of checkouts would otherwise make opening the picker crawl. Reaching it is
+-- reported, not swallowed.
+local DEFAULT_SCAN_LIMIT = 2000
+
+-- libuv repeats the path in its message ("EACCES: permission denied: /x"),
+-- and problem_lines prints the path itself.
+local function reason_for(err, path, fallback)
+  local text = err or fallback
+  return (text:gsub(": " .. vim.pesc(path) .. "$", ""))
+end
+
+local function positive(value, fallback)
+  local n = tonumber(value)
+  if n and n >= 1 then
+    return math.floor(n)
+  end
+  return fallback
+end
+
+---How many levels below each root to look. 1 is the old behaviour (immediate
+---children only). Overridable with vim.g.kebab_project_depth.
+function M.depth()
+  return positive(vim.g.kebab_project_depth, DEFAULT_DEPTH)
+end
+
+---How many directories a single scan may read before it gives up and says so.
+---Overridable with vim.g.kebab_project_scan_limit.
+function M.scan_limit()
+  return positive(vim.g.kebab_project_scan_limit, DEFAULT_SCAN_LIMIT)
+end
+
+---Every project under the roots, nearest first.
+---
+---Breadth first and bounded. A directory that is itself a project is recorded
+---and *not* descended into: a monorepo is one entry, and the scan cannot be
+---led into its node_modules.
+---
+---The second return is what went wrong, which used to be dropped on the floor
+---by a bare `if fd then`: a root that exists but cannot be read looked exactly
+---like a root with no projects in it.
+---@return table[] projects, table[] problems each { path, reason }
 function M.discover()
-  local found = {}
-  local seen = {}
+  local found, seen, problems = {}, {}, {}
+  local depth, limit = M.depth(), M.scan_limit()
+  local explicit = M.roots_source() ~= "default"
+  local scanned = 0
+
+  local queue = {}
   for _, root in ipairs(M.roots()) do
-    local path = require("kebab.path").expand(root)
-    local fd = uv.fs_scandir(path)
-    if fd then
+    local path = (require("kebab.path").expand(root):gsub("/+$", ""))
+    if path ~= "" and not seen[path] then
+      seen[path] = true
+      local stat, serr = uv.fs_stat(path)
+      if not stat then
+        -- only a root the user named: see M.roots_source()
+        if explicit then
+          problems[#problems + 1] = { path = path, reason = reason_for(serr, path, "does not exist") }
+        end
+      elseif stat.type ~= "directory" then
+        problems[#problems + 1] = { path = path, reason = "not a directory" }
+      else
+        queue[#queue + 1] = { path = path, level = 1, base = path, label = vim.fn.fnamemodify(path, ":t") }
+      end
+    end
+  end
+
+  local at = 1
+  while at <= #queue do
+    local item = queue[at]
+    at = at + 1
+    if scanned >= limit then
+      problems[#problems + 1] = {
+        path = item.path,
+        reason = ("scan stopped after %d directories (vim.g.kebab_project_scan_limit)"):format(limit),
+      }
+      break
+    end
+    scanned = scanned + 1
+    local fd, err = uv.fs_scandir(item.path)
+    if not fd then
+      problems[#problems + 1] = { path = item.path, reason = reason_for(err, item.path, "cannot be read") }
+    else
       while true do
         local name, typ = uv.fs_scandir_next(fd)
-        if not name then break end
-        local full = path .. "/" .. name
-        if is_dir(full, typ) and is_project(full) and not seen[full] then
-          seen[full] = true
-          found[#found + 1] = {
-            path = full,
-            name = name,
-            root = vim.fn.fnamemodify(path, ":t"),
-            kind = kind_of(full),
-          }
+        if not name then
+          break
+        end
+        local full = item.path .. "/" .. name
+        if is_dir(full, typ) and not seen[full] then
+          if is_project(full) then
+            seen[full] = true
+            found[#found + 1] = {
+              path = full,
+              name = name,
+              -- how to say *which* one when two checkouts share a basename
+              rel = full:sub(#item.base + 2),
+              root = item.label,
+              kind = kind_of(full),
+            }
+          elseif item.level < depth and not SKIP_DIRS[name] and name:sub(1, 1) ~= "." then
+            -- A hidden directory can be a project (~/Projects/.dotfiles, found
+            -- above) but is never worth walking through to reach one.
+            queue[#queue + 1] = { path = full, level = item.level + 1, base = item.base, label = item.label }
+          end
         end
       end
     end
   end
-  table.sort(found, function(a, b) return a.name:lower() < b.name:lower() end)
-  return found
+
+  table.sort(found, function(a, b)
+    if a.name:lower() == b.name:lower() then
+      return a.path < b.path
+    end
+    return a.name:lower() < b.name:lower()
+  end)
+  return found, problems
+end
+
+---One line per problem, for a notification or a terminal.
+---@param problems table[]
+---@return string[]
+function M.problem_lines(problems)
+  local lines = {}
+  for _, p in ipairs(problems or {}) do
+    lines[#lines + 1] = ("%s: %s"):format(vim.fn.fnamemodify(p.path, ":~"), p.reason)
+  end
+  return lines
 end
 
 -- Switch the editor to a project directory.
@@ -107,14 +252,19 @@ function M.open_dir(dir)
 end
 
 function M.open_project()
-  local projects = M.discover()
+  local projects, problems = M.discover()
+  -- Report an unreadable or missing root even when projects were found: the
+  -- one the user is looking for may be the one in the root that was skipped.
+  if #problems > 0 then
+    vim.notify("Project roots skipped:\n" .. table.concat(M.problem_lines(problems), "\n"), vim.log.levels.WARN)
+  end
   if #projects == 0 then
     return vim.notify("No projects found under " .. table.concat(M.roots(), ", "), vim.log.levels.WARN)
   end
   vim.ui.select(projects, {
     prompt = "Open Project",
     format_item = function(p)
-      return string.format("%-28s  %-8s  %s", p.name, p.kind, p.root)
+      return string.format("%-28s  %-8s  %s", p.rel or p.name, p.kind, p.root)
     end,
   }, function(choice)
     if choice then

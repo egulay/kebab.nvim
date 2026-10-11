@@ -509,6 +509,21 @@ client attached, file contents reverted.
   not even a wrapper that chains through to LazyVim's stand-in. Chaining hits
   the same replay-feeds-itself loop as capture/restore: measured 18s with the
   baseline, still running after 120s with a chained wrapper.
+- Project discovery scans **two levels**, so three guards are load-bearing: a
+  directory that is itself a project is recorded and not descended into, the
+  `SKIP_DIRS` list (`node_modules`, `target`, `build`, ...) is never walked,
+  and `scan_limit` caps the whole scan. Remove any one and opening the picker
+  walks a vendored dependency tree. A hidden directory can *be* a project
+  (`~/Projects/.dotfiles`) but is never walked through to reach one.
+- `project.discover()` returns **`projects, problems`**. Two consequences: a
+  bare `if fd then` around a scandir is how the silent skip got shipped -- an
+  unreadable root looked like an empty one -- and `H.eq(x, project.discover())`
+  now passes the problems table as the *message* argument, so wrap the call in
+  parens when only the first value is wanted.
+- A missing **default** root is not a problem: the defaults name
+  `~/src` and friends, which most machines lack. Only a root the user
+  named in `vim.g.kebab_project_roots` or `$KEBAB_PROJECT_ROOTS` is reported
+  missing; an unreadable directory is always reported.
 - `handle:kill()` then `handle:close()` in the same tick drops the pid from
   libuv's queue before SIGCHLD, so the child is **never waitpid'd** and stays
   `<defunct>`. Close the handle in the exit callback, which is also the only

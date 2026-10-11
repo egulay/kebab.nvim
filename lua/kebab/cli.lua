@@ -131,13 +131,18 @@ end
 
 ---Lines listing every discovered project. Plain text, for a terminal.
 function M.list_lines()
-  local all = project.discover()
-  if #all == 0 then
-    return { "No projects found under " .. table.concat(project.roots(), ", ") }
-  end
+  local all, problems = project.discover()
   local lines = {}
+  if #all == 0 then
+    lines[#lines + 1] = "No projects found under " .. table.concat(project.roots(), ", ")
+  end
   for _, p in ipairs(all) do
-    lines[#lines + 1] = string.format("%-28s  %-8s  %s", p.name, p.kind, p.path)
+    lines[#lines + 1] = string.format("%-28s  %-8s  %s", p.rel or p.name, p.kind, p.path)
+  end
+  -- A root that could not be read is said out loud rather than looking like a
+  -- root with nothing in it.
+  for _, line in ipairs(project.problem_lines(problems)) do
+    lines[#lines + 1] = "skipped " .. line
   end
   return lines
 end
@@ -507,8 +512,11 @@ function M.doctor()
   add("Projects", "project roots exist", nil,
     ("%d/%d present: %s"):format(#existing, #roots, table.concat(existing, ", ")),
     { present = #existing > 0 })
-  local discovered = #project.discover()
-  add("Projects", "projects discovered", nil, tostring(discovered), { present = discovered > 0 })
+  local discovered, problems = project.discover()
+  add("Projects", "projects discovered", nil, tostring(#discovered), { present = #discovered > 0 })
+  add("Projects", "project roots readable", nil,
+    #problems == 0 and "all" or table.concat(project.problem_lines(problems), "; "),
+    { present = #problems == 0, why = "a root that cannot be read hides every project inside it" })
 
   return checks
 end

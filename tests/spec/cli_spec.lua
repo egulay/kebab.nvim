@@ -220,6 +220,23 @@ H.describe("kebab reports", function()
     end)
   end)
 
+  H.it("names a root it had to skip", function()
+    -- `kebab list` printing nothing for a root the user can see on disk is
+    -- the terminal half of the silent skip.
+    local root = H.tmpdir("cli-locked")
+    vim.fn.mkdir(root .. "/good/.git", "p")
+    vim.fn.mkdir(root .. "/locked/sub", "p")
+    vim.fn.system({ "chmod", "000", root .. "/locked" })
+    local lines
+    with_roots({ root }, function()
+      lines = cli.list_lines()
+    end)
+    vim.fn.system({ "chmod", "755", root .. "/locked" })
+    local joined = table.concat(lines, "\n")
+    H.matches("good", joined)
+    H.matches("skipped.*locked.*EACCES", joined)
+  end)
+
   H.it("lists the project types with their key and label", function()
     local lines = cli.type_lines()
     H.eq(#project.project_types(), #lines)
@@ -370,6 +387,40 @@ H.describe("kebab doctor", function()
     -- vim._watch.inotify runs the binary; :IdeFollow cannot start without it.
     local c = check("tool: inotifywait")
     H.matches("IdeFollow", c.why .. " " .. c.without)
+  end)
+end)
+
+H.describe("doctor on the project roots", function()
+  local function check(checks, name)
+    for _, c in ipairs(checks) do
+      if c.name == name then return c end
+    end
+    error("no doctor check named " .. name, 2)
+  end
+
+  H.it("reports the roots as readable when they are", function()
+    local root = H.tmpdir("doctor-roots")
+    vim.fn.mkdir(root .. "/thing/.git", "p")
+    local c
+    with_roots({ root }, function()
+      c = check(cli.doctor(), "project roots readable")
+    end)
+    H.eq("all", c.detail)
+    H.eq(true, c.present)
+  end)
+
+  H.it("reports one that is not", function()
+    local root = H.tmpdir("doctor-locked")
+    vim.fn.mkdir(root .. "/locked/sub", "p")
+    vim.fn.system({ "chmod", "000", root .. "/locked" })
+    local c
+    with_roots({ root }, function()
+      c = check(cli.doctor(), "project roots readable")
+    end)
+    vim.fn.system({ "chmod", "755", root .. "/locked" })
+    H.eq(false, c.present, "an unreadable directory should not pass")
+    H.matches("EACCES", c.detail)
+    H.ok(c.why ~= nil, "the report should say what it costs")
   end)
 end)
 

@@ -163,6 +163,14 @@ Project roots default to `~/Projects`, `~/src`, `~/code` and
 `vim.g.kebab_project_roots`. `KEBAB_DRY_RUN=1` prints the Lua a command would
 run instead of running it.
 
+Each root is scanned two levels deep, so `~/Projects/work/<project>` is found
+as well as `~/Projects/<project>`; a directory that is itself a project is not
+descended into, and `node_modules` and friends are never walked.
+`vim.g.kebab_project_depth` (default 2) and `vim.g.kebab_project_scan_limit`
+(default 2000 directories) bound it. A root that exists but cannot be read is
+reported rather than silently skipped — `kebab list` says `skipped <path>:
+EACCES`, and `kebab doctor` has a "project roots readable" check.
+
 ## Databases
 
 Shaped like a dedicated database IDE: add a data source once, then browse it

@@ -90,10 +90,55 @@ H.describe("project discovery", function()
     end)
   end)
 
-  H.it("ignores a root that does not exist", function()
+  H.it("reports a root the user named that does not exist", function()
+    -- Not merely ignored: the whole point of the second return is that
+    -- "that root is gone" and "that root holds no projects" used to look the
+    -- same from the outside.
     with_roots({ "/definitely/not/here/at/all" }, function()
-      H.eq({}, project.discover())
+      local found, problems = project.discover()
+      H.eq({}, found)
+      H.eq(1, #problems, "a named root that is missing should be reported")
+      H.eq("/definitely/not/here/at/all", problems[1].path)
+      H.ok(problems[1].reason:find("ENOENT") ~= nil, "reason should say why: " .. problems[1].reason)
     end)
+  end)
+
+  H.it("says nothing about a missing default root", function()
+    -- The defaults name roots most machines do not have; warning about those
+    -- would train the user to ignore the warning.
+    local saved_g, saved_env = vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS
+    vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS = nil, nil
+    local _, problems = project.discover()
+    local missing = {}
+    for _, pr in ipairs(problems) do
+      if pr.reason:find("ENOENT") then
+        missing[#missing + 1] = pr.path
+      end
+    end
+    vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS = saved_g, saved_env
+    H.eq({}, missing, "a default root that is absent is not a problem")
+  end)
+
+  H.it("reports a root that exists but cannot be read", function()
+    local root = H.tmpdir("unreadable")
+    vim.fn.mkdir(root .. "/locked", "p")
+    H.write(root .. "/locked/.keep", "")
+    vim.fn.mkdir(root .. "/open/.git", "p")
+    vim.fn.system({ "chmod", "000", root .. "/locked" })
+    H.eq(0, vim.v.shell_error, "chmod should have worked")
+
+    local found, problems
+    with_roots({ root }, function()
+      found, problems = project.discover()
+    end)
+    vim.fn.system({ "chmod", "755", root .. "/locked" })
+
+    H.eq({ "open" }, vim.tbl_map(function(pr) return pr.name end, found))
+    H.eq(1, #problems, "the unreadable directory should be reported")
+    H.eq(root .. "/locked", problems[1].path)
+    H.ok(problems[1].reason:find("EACCES") ~= nil, "reason should say why: " .. problems[1].reason)
+    -- the path is printed by problem_lines, so it is not repeated in the reason
+    H.ok(problems[1].reason:find(root, 1, true) == nil, "reason should not repeat the path")
   end)
 
   H.it("lists each project once even if two roots overlap", function()
@@ -104,6 +149,88 @@ H.describe("project discovery", function()
     end)
   end)
 
+  H.it("finds a project one grouping directory below a root", function()
+    -- ~/Projects/work/<project> is the layout discovery kept missing: only
+    -- immediate children were scanned, so the grouping directory -- which
+    -- carries no marker of its own -- was a dead end.
+    local root = H.tmpdir("grouped")
+    vim.fn.mkdir(root .. "/flat-project/.git", "p")
+    vim.fn.mkdir(root .. "/group/nested-project/.git", "p")
+    vim.fn.mkdir(root .. "/group/deeper/too-deep-project/.git", "p")
+
+    with_roots({ root }, function()
+      local found = project.discover()
+      local rels = vim.tbl_map(function(p) return p.rel end, found)
+      table.sort(rels)
+      H.eq({ "flat-project", "group/nested-project" }, rels,
+        "two levels, and no further: too-deep-project is depth 3")
+    end)
+  end)
+
+  H.it("names a nested project by its path below the root", function()
+    local root = H.tmpdir("relnames")
+    vim.fn.mkdir(root .. "/group/alpha-api/.git", "p")
+    with_roots({ root }, function()
+      local found = project.discover()
+      H.eq(1, #found)
+      H.eq("alpha-api", found[1].name, "name stays the basename, so `kebab open alpha-api` matches")
+      H.eq("group/alpha-api", found[1].rel, "rel says which one, for the picker")
+    end)
+  end)
+
+  H.it("respects vim.g.kebab_project_depth", function()
+    local root = H.tmpdir("depth1")
+    vim.fn.mkdir(root .. "/flat/.git", "p")
+    vim.fn.mkdir(root .. "/group/nested/.git", "p")
+    local saved = vim.g.kebab_project_depth
+    vim.g.kebab_project_depth = 1
+    local names
+    with_roots({ root }, function()
+      names = vim.tbl_map(function(p) return p.name end, project.discover())
+    end)
+    vim.g.kebab_project_depth = saved
+    H.eq({ "flat" }, names, "depth 1 is immediate children only")
+  end)
+
+  H.it("does not descend into a project, or into build output", function()
+    -- A checkout with a vendored dependency tree is one project, not a
+    -- hundred: this is what keeps a depth of 2 affordable.
+    local root = H.tmpdir("nodescend")
+    vim.fn.mkdir(root .. "/app/.git", "p")
+    vim.fn.mkdir(root .. "/app/node_modules/dep/.git", "p")
+    vim.fn.mkdir(root .. "/node_modules/loose/.git", "p")
+    vim.fn.mkdir(root .. "/target/gen/.git", "p")
+
+    with_roots({ root }, function()
+      H.eq({ "app" }, vim.tbl_map(function(p) return p.name end, project.discover()))
+    end)
+  end)
+
+  H.it("finds a hidden project but does not walk through one", function()
+    local root = H.tmpdir("hidden")
+    vim.fn.mkdir(root .. "/.dotfiles/.git", "p")
+    vim.fn.mkdir(root .. "/.cache/sub/.git", "p")
+    with_roots({ root }, function()
+      H.eq({ ".dotfiles" }, vim.tbl_map(function(p) return p.name end, project.discover()))
+    end)
+  end)
+
+  H.it("stops at the scan limit and says so", function()
+    local root = H.tmpdir("budget")
+    vim.fn.mkdir(root .. "/a/one/.git", "p")
+    vim.fn.mkdir(root .. "/b/two/.git", "p")
+    local saved = vim.g.kebab_project_scan_limit
+    vim.g.kebab_project_scan_limit = 1
+    local found, problems
+    with_roots({ root }, function()
+      found, problems = project.discover()
+    end)
+    vim.g.kebab_project_scan_limit = saved
+    H.eq({}, found, "only the root itself was read, and it holds no project")
+    H.eq(1, #problems)
+    H.ok(problems[1].reason:find("scan stopped") ~= nil, "reason: " .. problems[1].reason)
+  end)
+
   H.it("sorts case-insensitively by name", function()
     local root = H.tmpdir("sorted")
     for _, n in ipairs({ "Zebra", "apple", "Mango" }) do
@@ -112,6 +239,45 @@ H.describe("project discovery", function()
     with_roots({ root }, function()
       H.eq({ "apple", "Mango", "Zebra" }, vim.tbl_map(function(p) return p.name end, project.discover()))
     end)
+  end)
+end)
+
+H.describe("the Open Project picker", function()
+  H.it("offers a nested project by its path below the root", function()
+    local root = H.tmpdir("pickrel")
+    vim.fn.mkdir(root .. "/group/alpha-api/.git", "p")
+    local labels
+    with_roots({ root }, function()
+      H.capture_notify(function()
+        H.with_ui({ function(items)
+          labels = vim.tbl_map(function(i) return i.rel end, items)
+          return nil -- cancel: opening would cd and leave a tree window behind
+        end }, function()
+          project.open_project()
+        end)
+      end)
+    end)
+    H.eq({ "group/alpha-api" }, labels)
+  end)
+
+  H.it("warns about a root it could not read, and still offers the rest", function()
+    local root = H.tmpdir("pickwarn")
+    vim.fn.mkdir(root .. "/good/.git", "p")
+    local notes, count
+    with_roots({ root, "/definitely/not/here/at/all" }, function()
+      notes = H.capture_notify(function()
+        H.with_ui({ function(items)
+          count = #items
+          return nil
+        end }, function()
+          project.open_project()
+        end)
+      end)
+    end)
+    H.eq(1, count, "the readable root's project is still offered")
+    local joined = table.concat(vim.tbl_map(function(n) return n.msg end, notes), "\n")
+    H.matches("/definitely/not/here/at/all", joined)
+    H.ok(notes[1].level == vim.log.levels.WARN, "a skipped root is a warning")
   end)
 end)
 
