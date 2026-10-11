@@ -401,3 +401,180 @@ H.describe("the remote protocol", function()
     end
   end)
 end)
+
+-- Columns were emitted as the raw LSP `character + 1`, i.e. in the server's
+-- offset encoding. gopls, jdtls, basedpyright, vtsls and svelte all negotiate
+-- utf-16 here, so on a line with non-ASCII before the symbol the number was
+-- neither a byte column nor valid input to kebab's own commands -- and it
+-- disagreed with the columns `diagnostics` reports for the same file.
+H.describe("columns on a line with non-ASCII", function()
+  local lsp = require("kebab.lsp")
+  local dir, line
+
+  local function fixture()
+    if dir then
+      return dir
+    end
+    if vim.fn.executable("go") == 0 then
+      H.skip("go is needed")
+    end
+    dir = H.tmpdir("enc")
+    local res = vim.system({ "go", "mod", "init", "example.com/enc" }, { cwd = dir, text = true }):wait(60000)
+    H.eq(0, res.code, tostring(res.stderr))
+    line = '\tfmt.Println(helper("wörld ünïcode"), helper("x"))'
+    H.write(
+      dir .. "/main.go",
+      table.concat({
+        "package main",
+        "",
+        'import "fmt"',
+        "",
+        "func helper(s string) string {",
+        "\treturn s",
+        "}",
+        "",
+        "func main() {",
+        line,
+        "}",
+      }, "\n")
+    )
+    return dir
+  end
+
+  H.it("reports a byte column, matching what diagnostics reports", function()
+    local root = fixture()
+    local saved = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(root))
+    local ok, err = pcall(function()
+      -- the second `helper(` sits after three two-byte characters, so its byte
+      -- column and its utf-16 column differ by three
+      local byte_col = line:find("helper", line:find("helper") + 1)
+      local utf16_col = vim.str_utfindex(line, "utf-16", byte_col - 1) + 1
+      H.ok(byte_col ~= utf16_col, "the fixture has to actually distinguish them")
+
+      local result, rerr = lsp.references("main.go", 5, 6, { attach_timeout = 120000, request_timeout = 30000 })
+      if not result then
+        H.skip("no language server answered: " .. tostring(rerr))
+      end
+      local cols = {}
+      for _, loc in ipairs(result.locations) do
+        if loc.line == 10 then
+          cols[#cols + 1] = loc.col
+        end
+      end
+      H.ok(vim.tbl_contains(cols, byte_col), ("expected the byte column %d, got %s"):format(byte_col, vim.inspect(cols)))
+      H.falsy(vim.tbl_contains(cols, utf16_col), ("the utf-16 column %d is the bug"):format(utf16_col))
+    end)
+    vim.cmd("cd " .. vim.fn.fnameescape(saved))
+    H.ok(ok, tostring(err))
+  end)
+
+  H.it("round-trips its own output", function()
+    local root = fixture()
+    local saved = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(root))
+    local ok, err = pcall(function()
+      local byte_col = line:find("helper", line:find("helper") + 1)
+      -- feeding a reported position back in has to land on the same symbol
+      local result, rerr = lsp.definition("main.go", 10, byte_col, { attach_timeout = 120000, request_timeout = 30000 })
+      if not result then
+        H.skip("no language server answered: " .. tostring(rerr))
+      end
+      H.eq(1, result.count, vim.inspect(result.locations))
+      H.eq(5, result.locations[1].line, "it should resolve to the helper definition")
+    end)
+    vim.cmd("cd " .. vim.fn.fnameescape(saved))
+    H.ok(ok, tostring(err))
+  end)
+end)
+
+H.describe("a language server that refuses a request", function()
+  local lsp = require("kebab.lsp")
+
+  -- A client whose RPC channel has closed is still handed back by get_clients,
+  -- and request() then returns false without ever calling the handler.
+  -- Ignoring that left the pending counter stuck, so every query burned its
+  -- full 20s timeout and then blamed the server for being slow.
+  H.it("is reported at once, not after the whole timeout", function()
+    requires_go()
+    in_fixture(function()
+      local healthy = lsp.definition("main.go", 10, 14, { attach_timeout = 120000, request_timeout = 20000 })
+      if not healthy then
+        H.skip("no language server answered")
+      end
+      local clients = vim.lsp.get_clients({ bufnr = vim.fn.bufnr("main.go") })
+      if #clients == 0 then
+        H.skip("no client attached to the fixture")
+      end
+      local saved = {}
+      for i, c in ipairs(clients) do
+        saved[i] = c.request
+        c.request = function()
+          return false
+        end
+      end
+      local started = vim.uv.now()
+      local result, err = lsp.definition("main.go", 10, 14, { attach_timeout = 120000, request_timeout = 20000 })
+      local took = vim.uv.now() - started
+      for i, c in ipairs(clients) do
+        c.request = saved[i]
+      end
+      H.falsy(result)
+      H.matches("rejected the request", err, "got: " .. tostring(err))
+      H.ok(took < 5000, ("it should fail fast, took %dms"):format(took))
+    end)
+  end)
+end)
+
+H.describe("querying many files from one instance", function()
+  local lsp = require("kebab.lsp")
+
+  local function loaded_count()
+    local n = 0
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(b) then
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  -- `kebab serve` is long-lived: every query used to add a loaded buffer and a
+  -- didOpen'd document for good, so a few thousand files meant a few thousand
+  -- buffers.
+  H.it("does not accumulate a buffer per query", function()
+    requires_go()
+    in_fixture(function(dir)
+      for i = 1, 6 do
+        H.write(dir .. ("/leak%d.go"):format(i), ("package main\n\nfunc leak%d() int { return %d }\n"):format(i, i))
+      end
+      local before = loaded_count()
+      for i = 1, 6 do
+        lsp.diagnostics(("leak%d.go"):format(i), { settle = 500, attach_timeout = 120000 })
+      end
+      local after = loaded_count()
+      H.ok(after - before <= 2, ("buffers grew by %d over 6 queries"):format(after - before))
+    end)
+  end)
+
+  H.it("leaves a buffer the user had open alone", function()
+    requires_go()
+    in_fixture(function(dir)
+      H.write(dir .. "/mine.go", "package main\n\nfunc mine() int { return 1 }\n")
+      vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/mine.go"))
+      local mine = vim.api.nvim_get_current_buf()
+      vim.cmd("enew")
+      lsp.diagnostics("mine.go", { settle = 500, attach_timeout = 120000 })
+      H.ok(vim.api.nvim_buf_is_loaded(mine), "a buffer this module did not open must survive")
+      H.reset_editor()
+    end)
+  end)
+
+  H.it("refuses a directory instead of blocking on it", function()
+    local started = vim.uv.now()
+    local result, err = lsp.diagnostics(H.tmpdir("a-directory"), { attach_timeout = 120000 })
+    H.falsy(result)
+    H.matches("not a file", err)
+    H.ok(vim.uv.now() - started < 3000, "nothing will ever attach to a directory")
+  end)
+end)

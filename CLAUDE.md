@@ -267,6 +267,26 @@ client attached, file contents reverted.
 - A warm-process request that **timed out** must not be retried as a one-shot:
   the server may have executed and committed it. Only "nothing was sent" is
   retryable. `jdbc.request` returns that as a third value.
+- An LSP `character` offset is in the **server's offset encoding**, not bytes.
+  Every server here negotiates utf-16, so `character + 1` was wrong on any line
+  with non-ASCII before the symbol -- and it disagreed with `diagnostics`,
+  whose columns come from `vim.diagnostic` and are byte-based. `lsp.lua`
+  converts with `vim.str_byteindex`, so one tool answers in one coordinate
+  system and its own output can be fed back in.
+- **`client:request` returns a boolean.** A client whose RPC channel has closed
+  is still returned by `get_clients` -- client objects leave `lsp.client._all`
+  only after two nested `vim.schedule`s -- and `request` then returns false
+  without ever calling the handler. Ignoring it left the pending counter stuck,
+  so every query burned its full 20s timeout and blamed the server. Measured
+  after the fix: 3ms and "gopls rejected the request".
+- `position_params` must be built **per client**: a buffer commonly has two
+  clients with different encodings (basedpyright utf-16, ruff utf-8 on every
+  Python file here), and `get_clients(...)[1]` is not reliably the lowest id.
+- `M.open` loads a buffer, and `kebab serve` is long-lived: a query per file
+  meant a buffer and a didOpen'd document per file, for good. `lsp.release`
+  unloads what the module itself loaded -- stepping off it first, because
+  `:edit` puts it in the current window so a "is it visible?" guard would
+  refuse every time. Measured bounded at +2 over 20 queries, was +1 each.
 - A **warm process is keyed by URL, but credentials are baked in at spawn**.
   Two saved connections can share a URL and differ only in user -- the URL
   templates carry host, port and database only -- so a "readonly" connection

@@ -87,6 +87,9 @@ function M.stable_diagnostics(bufnr, first, t)
   return vim.diagnostic.get(bufnr)
 end
 
+-- Buffers this module loaded, so only those are unloaded again.
+local opened_by_us = {}
+
 ---An argument turned into an absolute path.
 ---
 ---Named separately so the path handling can be tested without opening a file.
@@ -109,22 +112,71 @@ end
 function M.open(path, opts)
   local t = timeouts(opts)
   local full = M.resolve_path(path)
-  if not vim.uv.fs_stat(full) then
+  local stat = vim.uv.fs_stat(full)
+  if not stat then
     return nil, "no such file: " .. path
   end
+  if stat.type == "directory" then
+    -- fs_stat happily accepts one, and nothing would ever attach to it: a
+    -- 120-second block and a permanent buffer for a certain failure.
+    return nil, "not a file: " .. path
+  end
+
+  -- Whether *we* loaded it decides whether we may unload it afterwards. In the
+  -- long-lived `kebab serve` instance every query used to add a loaded buffer
+  -- and a didOpen'd document for good -- a few thousand files, a few thousand
+  -- buffers -- and the failure path left one behind too.
+  local existing = vim.fn.bufnr(full)
+  local was_loaded = existing ~= -1 and vim.api.nvim_buf_is_loaded(existing) == true
+  local previous = vim.api.nvim_get_current_buf()
 
   local ok, err = pcall(vim.cmd, "edit " .. vim.fn.fnameescape(full))
   if not ok then
     return nil, "could not open " .. path .. ": " .. tostring(err)
   end
   local bufnr = vim.api.nvim_get_current_buf()
+  if not was_loaded then
+    -- `previous` is where to step back to before unloading: :edit puts the
+    -- queried file in the *current* window, so it is always visible and a
+    -- plain "is it visible?" guard would refuse every release.
+    opened_by_us[bufnr] = { previous = previous }
+  end
 
   if not vim.wait(t.attach, function()
     return #vim.lsp.get_clients({ bufnr = bufnr }) > 0
   end, 50) then
+    M.release(bufnr)
     return nil, ("no language server attached to %s within %dms"):format(path, t.attach)
   end
   return bufnr
+end
+
+---Unload a buffer this module loaded, leaving one the user had alone.
+---
+---Called at the end of every query so a warm instance does not accumulate a
+---buffer per file queried. A buffer that is on screen is never touched.
+---@param bufnr number|nil
+function M.release(bufnr)
+  local info = bufnr and opened_by_us[bufnr]
+  if not info then
+    return false
+  end
+  opened_by_us[bufnr] = nil
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  if vim.api.nvim_get_current_buf() == bufnr then
+    if info.previous and vim.api.nvim_buf_is_valid(info.previous) then
+      pcall(vim.api.nvim_set_current_buf, info.previous)
+    else
+      pcall(vim.cmd, "enew")
+    end
+  end
+  if vim.fn.bufwinid(bufnr) ~= -1 then
+    -- still on screen somewhere else: someone is looking at it
+    return false
+  end
+  return pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
 end
 
 ---The attached clients' names, for reporting.
@@ -205,27 +257,47 @@ function M.diagnostics(path, opts)
     end
     return a.col < b.col
   end)
-  return {
+  local answer = {
     file = vim.api.nvim_buf_get_name(bufnr),
     clients = M.clients(bufnr),
     settled = settled or #out > 0,
     count = #out,
     diagnostics = out,
   }
+  M.release(bufnr)
+  return answer
 end
 
 -- ------------------------------------------------------------- positions
 
 ---Ask one request of every attached client and gather the answers.
+---
+---`params_for` may be a table (the same params for every client) or a function
+---of the client, which is what differing offset encodings require: a buffer
+---commonly has two clients with different encodings -- basedpyright utf-16 and
+---ruff utf-8 on every Python file here -- and sending one client's byte column
+---to the other resolves the wrong symbol.
+---@param bufnr number
+---@param method string
+---@param params_for table|fun(client: table): table
+---@param timeout number
 ---@return table[] results, string|nil err
-local function request_all(bufnr, method, params, timeout)
+local function request_all(bufnr, method, params_for, timeout)
   local clients = vim.lsp.get_clients({ bufnr = bufnr, method = method })
   if #clients == 0 then
     return {}, ("no attached language server implements %s"):format(method)
   end
   local collected, pending, failed = {}, #clients, nil
+  local refused = {}
   for _, client in ipairs(clients) do
-    client:request(method, params, function(rerr, result)
+    local params = type(params_for) == "function" and params_for(client) or params_for
+    -- The boolean matters. A client whose RPC channel has closed is still
+    -- handed back by get_clients -- client objects leave lsp.client._all only
+    -- after two nested vim.schedules -- and request() then returns false
+    -- without ever calling the handler. Ignoring that left `pending` stuck, so
+    -- every query cost the full 20s timeout and then blamed the server for
+    -- being slow, even when a healthy client had answered in 30ms.
+    local sent = client:request(method, params, function(rerr, result)
       if rerr then
         failed = tostring(rerr.message or rerr)
       elseif result ~= nil then
@@ -233,35 +305,89 @@ local function request_all(bufnr, method, params, timeout)
       end
       pending = pending - 1
     end, bufnr)
+    if sent == false then
+      pending = pending - 1
+      refused[#refused + 1] = client.name
+    end
   end
-  if not vim.wait(timeout, function() return pending == 0 end, 20) then
+  if not vim.wait(timeout, function()
+    return pending == 0
+  end, 20) then
     return collected, "the language server did not answer in time"
+  end
+  if #collected == 0 and #refused > 0 and not failed then
+    return collected, ("%s rejected the request (the client is shutting down?)"):format(
+      table.concat(refused, ", ")
+    )
   end
   return collected, failed
 end
 
----Position params for a 1-based line and column, which is what a person and a
----command line use; LSP counts from zero.
-local function position_params(bufnr, line, col)
-  local client = vim.lsp.get_clients({ bufnr = bufnr })[1]
-  local encoding = client and client.offset_encoding or "utf-16"
-  local count = vim.api.nvim_buf_line_count(bufnr)
-  line = math.max(1, math.min(tonumber(line) or 1, count))
-  col = math.max(1, tonumber(col) or 1)
-  -- make_position_params reads the cursor, so put it where we were asked
-  local win = vim.fn.bufwinid(bufnr)
-  if win == -1 then
-    vim.api.nvim_set_current_buf(bufnr)
-    win = vim.api.nvim_get_current_win()
+---One line of a file, from a loaded buffer when there is one.
+---
+---`cache` is per call: a references result commonly holds dozens of hits in
+---one file, and re-reading it for each would be silly.
+---@param path string
+---@param line1 number 1-based
+---@param cache table
+local function line_text(path, line1, cache)
+  local lines = cache[path]
+  if lines == nil then
+    local bufnr = vim.fn.bufnr(path)
+    if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+      lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    else
+      local ok, read = pcall(vim.fn.readfile, path)
+      lines = ok and read or false
+    end
+    cache[path] = lines
   end
-  local text = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
-  pcall(vim.api.nvim_win_set_cursor, win, { line, math.min(col - 1, #text) })
-  return vim.lsp.util.make_position_params(win, encoding)
+  if not lines then
+    return nil
+  end
+  return lines[line1]
+end
+
+---An LSP character offset turned into a 1-based *byte* column.
+---
+---The raw `character + 1` is in the server's offset encoding, so on a line
+---with non-ASCII before the symbol it is neither a byte column nor valid input
+---to kebab's own commands -- and it disagreed with the columns `diagnostics`
+---reports for the same file, which are byte-based. Feeding this tool's own
+---output back into it pointed at the wrong token.
+---@param path string
+---@param line1 number 1-based line
+---@param character number LSP character offset
+---@param encoding string "utf-8" | "utf-16" | "utf-32"
+---@param cache table
+---@return number col 1-based byte column
+local function byte_col(path, line1, character, encoding, cache)
+  character = tonumber(character) or 0
+  if character <= 0 then
+    return 1
+  end
+  if encoding == "utf-8" then
+    return character + 1
+  end
+  local text = line_text(path, line1, cache)
+  if type(text) ~= "string" then
+    return character + 1
+  end
+  local ok, byte = pcall(vim.str_byteindex, text, encoding, character, false)
+  if ok and type(byte) == "number" then
+    return byte + 1
+  end
+  -- An offset past the end of the line is not an error worth failing a query
+  -- for; clamp rather than refuse.
+  return math.min(character + 1, #text + 1)
 end
 
 ---Flatten whatever shape a location response takes into a list.
-local function locations(results)
+---@param results table[]
+---@param encoding string the offset encoding the answering client used
+local function locations(results, encoding)
   local out = {}
+  local cache = {}
   local function add(item)
     if type(item) ~= "table" then
       return
@@ -271,12 +397,15 @@ local function locations(results)
     if not uri or not range then
       return
     end
+    local file = vim.uri_to_fname(uri)
+    local line1 = range.start.line + 1
+    local end_line1 = range["end"].line + 1
     out[#out + 1] = {
-      file = vim.uri_to_fname(uri),
-      line = range.start.line + 1,
-      col = range.start.character + 1,
-      end_line = range["end"].line + 1,
-      end_col = range["end"].character + 1,
+      file = file,
+      line = line1,
+      col = byte_col(file, line1, range.start.character, encoding, cache),
+      end_line = end_line1,
+      end_col = byte_col(file, end_line1, range["end"].character, encoding, cache),
     }
   end
   for _, result in ipairs(results) do
@@ -292,6 +421,40 @@ local function locations(results)
   return out
 end
 
+---The offset encoding to interpret a response with.
+---
+---Every client implementing the method, which in practice is one: the two-client
+---case here is basedpyright (utf-16) plus ruff (utf-8), and only basedpyright
+---answers definition/references/hover/documentSymbol.
+---@param bufnr number
+---@param method string
+local function response_encoding(bufnr, method)
+  local clients = vim.lsp.get_clients({ bufnr = bufnr, method = method })
+  return (clients[1] and clients[1].offset_encoding) or "utf-16"
+end
+
+---Position params for a 1-based line and column, which is what a person and a
+---command line use; LSP counts from zero.
+---
+---Returns a function of the client, so each one is sent a position in its own
+---offset encoding.
+local function position_params(bufnr, line, col)
+  local count = vim.api.nvim_buf_line_count(bufnr)
+  line = math.max(1, math.min(tonumber(line) or 1, count))
+  col = math.max(1, tonumber(col) or 1)
+  -- make_position_params reads the cursor, so put it where we were asked
+  local win = vim.fn.bufwinid(bufnr)
+  if win == -1 then
+    vim.api.nvim_set_current_buf(bufnr)
+    win = vim.api.nvim_get_current_win()
+  end
+  local text = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
+  pcall(vim.api.nvim_win_set_cursor, win, { line, math.min(col - 1, #text) })
+  return function(client)
+    return vim.lsp.util.make_position_params(win, (client and client.offset_encoding) or "utf-16")
+  end
+end
+
 ---Where the symbol at a position is defined.
 function M.definition(path, line, col, opts)
   local t = timeouts(opts)
@@ -301,12 +464,14 @@ function M.definition(path, line, col, opts)
   end
   local params = position_params(bufnr, line, col)
   local results, rerr = request_all(bufnr, "textDocument/definition", params, t.request)
-  local found = locations(results)
+  local found = locations(results, response_encoding(bufnr, "textDocument/definition"))
+  local clients = M.clients(bufnr)
+  M.release(bufnr)
   if #found == 0 and rerr then
     return nil, rerr
   end
   return { query = { file = path, line = tonumber(line), col = tonumber(col) },
-    clients = M.clients(bufnr), count = #found, locations = found }
+    clients = clients, count = #found, locations = found }
 end
 
 ---Everywhere the symbol at a position is used.
@@ -317,10 +482,16 @@ function M.references(path, line, col, opts)
   if not bufnr then
     return nil, err
   end
-  local params = position_params(bufnr, line, col)
-  params.context = { includeDeclaration = opts.include_declaration ~= false }
+  local base = position_params(bufnr, line, col)
+  local params = function(client)
+    local p = base(client)
+    p.context = { includeDeclaration = opts.include_declaration ~= false }
+    return p
+  end
   local results, rerr = request_all(bufnr, "textDocument/references", params, t.request)
-  local found = locations(results)
+  local found = locations(results, response_encoding(bufnr, "textDocument/references"))
+  local clients = M.clients(bufnr)
+  M.release(bufnr)
   if #found == 0 and rerr then
     return nil, rerr
   end
@@ -334,29 +505,33 @@ function M.references(path, line, col, opts)
     return a.col < b.col
   end)
   return { query = { file = path, line = tonumber(line), col = tonumber(col) },
-    clients = M.clients(bufnr), count = #found, locations = found }
+    clients = clients, count = #found, locations = found }
 end
 
 -- ----------------------------------------------------------------- symbols
 
-local function flatten_symbols(items, out, depth)
+---@param ctx table { path, encoding, cache } so columns come out as bytes
+local function flatten_symbols(items, out, depth, ctx)
   out = out or {}
   depth = depth or 0
   for _, item in ipairs(items or {}) do
     local range = item.selectionRange or item.range
       or (item.location and item.location.range)
     if range then
+      local line1 = range.start.line + 1
       out[#out + 1] = {
         name = item.name,
         kind = symbol_kind(item.kind),
         detail = item.detail,
         depth = depth,
-        line = range.start.line + 1,
-        col = range.start.character + 1,
+        line = line1,
+        -- bytes, like the columns `diagnostics` reports, so one tool does not
+        -- answer in two different coordinate systems
+        col = byte_col(ctx.path, line1, range.start.character, ctx.encoding, ctx.cache),
       }
     end
     if item.children then
-      flatten_symbols(item.children, out, depth + 1)
+      flatten_symbols(item.children, out, depth + 1, ctx)
     end
   end
   return out
@@ -372,14 +547,20 @@ function M.symbols(path, opts)
   local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
   local results, rerr = request_all(bufnr, "textDocument/documentSymbol", params, t.request)
   local out = {}
+  local ctx = {
+    path = vim.api.nvim_buf_get_name(bufnr),
+    encoding = response_encoding(bufnr, "textDocument/documentSymbol"),
+    cache = {},
+  }
   for _, result in ipairs(results) do
-    flatten_symbols(result, out)
+    flatten_symbols(result, out, 0, ctx)
   end
+  local name, clients = vim.api.nvim_buf_get_name(bufnr), M.clients(bufnr)
+  M.release(bufnr)
   if #out == 0 and rerr then
     return nil, rerr
   end
-  return { file = vim.api.nvim_buf_get_name(bufnr), clients = M.clients(bufnr),
-    count = #out, symbols = out }
+  return { file = name, clients = clients, count = #out, symbols = out }
 end
 
 -- ------------------------------------------------------------------- hover
@@ -409,11 +590,13 @@ function M.hover(path, line, col, opts)
     end
   end
   local text = vim.trim(table.concat(chunks, "\n"))
+  local clients = M.clients(bufnr)
+  M.release(bufnr)
   if text == "" and rerr then
     return nil, rerr
   end
   return { query = { file = path, line = tonumber(line), col = tonumber(col) },
-    clients = M.clients(bufnr), text = text }
+    clients = clients, text = text }
 end
 
 ---Parse "path:line:col", the shape a command line and an editor both use.
