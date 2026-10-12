@@ -124,6 +124,12 @@ for _, m in ipairs(menus) do
   walk(m.items, m.name, flat)
 end
 
+-- The SQL menu too, or its own entries -- Run Statement and the pager, the
+-- ones added because they were missing -- would be the only menu in the layer
+-- nothing checks. It is a flat list with leaves at the top level, so it is
+-- walked directly rather than per section.
+walk(require("kebab.menus.sql"), "sql", flat)
+
 H.describe("editor menu", function()
   H.it("has the expected top-level menus", function()
     local names = vim.tbl_map(function(m) return m.name end, menus)

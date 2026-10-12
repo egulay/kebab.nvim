@@ -86,5 +86,52 @@ check "the pager says where you are"                 "ROWS.*rows 1-1 of 1"     "
 check "and shows its rows"                          "ROWS.*Ada Lovelace"       "$work/report.txt"
 check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    "$work/report.txt"
 
+# --- the right-click menu, which only a real terminal can open -------------
+#
+# Reported as "there is nothing on right click menu" and "no re-run on right
+# click or anywhere else". The menu renders as *virtual text* in a floating
+# window, so reading its buffer lines shows blanks; what is asserted here is
+# the composited screen, cell by cell, which is what the terminal draws.
+cat > "$work/menuchild.lua" <<'LUA'
+vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
+vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+require("kebab.cli").db("")
+vim.defer_fn(function()
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+end, 7000)
+vim.defer_fn(function()
+  local out = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local cfg = vim.api.nvim_win_get_config(w)
+    if cfg.relative ~= "" then
+      local pos = vim.api.nvim_win_get_position(w)
+      for r = pos[1] + 1, pos[1] + vim.api.nvim_win_get_height(w) do
+        local cells = {}
+        for c = pos[2] + 1, pos[2] + vim.api.nvim_win_get_width(w) do
+          cells[#cells + 1] = vim.fn.screenstring(r, c)
+        end
+        out[#out + 1] = "SCREEN " .. table.concat(cells)
+      end
+    end
+  end
+  if #out == 0 then out[1] = "no menu opened" end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 26000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/menuchild.lua"],
+  "actions": [ {"kind":"wait","seconds":16},
+               {"kind":"click","col":60,"row":3,"button":2,"count":1},
+               {"kind":"wait","seconds":8} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 90 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" REPORT_AFTER=26000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "a right click in the statement pane opens a menu" "SCREEN" "$work/report.txt"
+check "with Run Statement at the top of it"              "SCREEN.*Run Statement" "$work/report.txt"
+check "and its shortcut beside it"                       "Run Statement.*leader>S" "$work/report.txt"
+check "the rows pager is in there"                       "SCREEN.*Rows" "$work/report.txt"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

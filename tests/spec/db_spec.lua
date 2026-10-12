@@ -321,6 +321,62 @@ H.describe("credentials", function()
   end)
 end)
 
+H.describe("editing in a SQL buffer", function()
+  -- Neovim ships ftplugin/sql.vim but not autoload/sqlcomplete.vim, so that
+  -- ftplugin maps thirteen insert-mode keys to functions which do not exist.
+  -- Pressing <Left> in insert mode in any .sql buffer raised E117, and this
+  -- layer's whole SQL IDE lives in .sql buffers.
+  H.it("has no mapping pointing at a function Neovim does not ship", function()
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    local dead = {}
+    for _, mode in ipairs({ "i", "n", "v" }) do
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, mode)) do
+        local rhs = m.rhs or ""
+        for fn in rhs:gmatch("([%w_#]+)%s*%(") do
+          if fn:find("#") and vim.fn.exists("*" .. fn) == 0 then
+            dead[#dead + 1] = ("%s %s -> %s"):format(mode, m.lhs, fn)
+          end
+        end
+      end
+    end
+    H.eq({}, dead, "a mapping whose function is missing raises E117 on the keypress")
+  end)
+
+  H.it("leaves the arrow keys alone in insert mode", function()
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "i")) do
+      H.ok(m.lhs ~= "<Left>" and m.lhs ~= "<Right>",
+        ("%s should not be mapped in insert mode in a SQL buffer"):format(m.lhs))
+    end
+  end)
+
+  H.it("lets Ctrl-C leave insert mode without waiting for another key", function()
+    -- Eleven of the ftplugin's maps hung off <C-C>, so Ctrl-C became a prefix.
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    local prefixed = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "i")) do
+      if m.lhs:find("^<C%-C>.") then
+        prefixed[#prefixed + 1] = m.lhs
+      end
+    end
+    H.eq({}, prefixed)
+  end)
+
+  H.it("types and moves about with the arrows", function()
+    -- The behaviour, not the configuration: this is what the user did.
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "select a,", "select b,", "select c," })
+    vim.api.nvim_win_set_cursor(0, { 2, 4 })
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(
+      "i<Left><Left><Right>x<Up><Down>y<Esc>", true, false, true), "mx", false)
+    H.eq("selxyect b,", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
+  end)
+end)
+
 H.describe("the explorer and the mouse", function()
   H.it("opens the node under a double click", function()
     -- dadbod-ui maps <CR> and `o` and nothing else -- it has no mouse support

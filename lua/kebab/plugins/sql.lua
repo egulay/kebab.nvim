@@ -13,6 +13,19 @@
 -- alias, but not the bare table list and not `customers.` -> its columns. Since
 -- kebab.jdbc already has the whole schema from DatabaseMetaData, kebab.dbcomplete
 -- answers from that, with each column's type beside it.
+-- Neovim ships ftplugin/sql.vim but not autoload/sqlcomplete.vim, and that
+-- ftplugin maps thirteen insert-mode keys to sqlcomplete# functions which
+-- therefore do not exist. In any .sql buffer -- which is where this whole
+-- feature lives -- pressing <Left> or <Right> in insert mode raised
+--
+--   E117: Unknown function: sqlcomplete#DrillOutOfColumns
+--
+-- and eleven more hung off <C-C>, so Ctrl-C in insert mode waited for a second
+-- key instead of leaving insert mode. The ftplugin reads this variable when a
+-- sql buffer loads and skips the lot; it has to be set before the first one,
+-- so it is set here at spec-collection time rather than in an init.
+vim.g.omni_sql_no_default_maps = 1
+
 return {
   {
     "tpope/vim-dadbod",
@@ -20,6 +33,8 @@ return {
     -- :DB, and the store is what dadbod-ui reads for its connection list.
     init = function()
       require("kebab.db").setup()
+      -- :IdeDbRun and the pager commands, so the menu and `:` reach them too
+      require("kebab.dbide").setup()
     end,
   },
 

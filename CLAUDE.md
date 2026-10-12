@@ -543,6 +543,30 @@ client attached, file contents reverted.
   would be too late. An unreadable env file is a hard error: starting anyway
   opens the IDE with every connection failing to authenticate, which reads as
   a broken database rather than a typo.
+- **Neovim ships `ftplugin/sql.vim` but not `autoload/sqlcomplete.vim`**, so
+  that ftplugin leaves **thirteen** insert-mode mappings pointing at
+  `sqlcomplete#` functions which do not exist. `<Left>` and `<Right>` in a
+  `.sql` buffer raised `E117: Unknown function:
+  sqlcomplete#DrillOutOfColumns`, and eleven more hung off `<C-C>`, making
+  Ctrl-C a prefix that waited for a second key. `plugins/sql.lua` sets
+  `vim.g.omni_sql_no_default_maps = 1` at spec-collection time, before any sql
+  buffer can load. `db_spec` asserts no mapping in a sql buffer names a
+  function `exists("*...")` denies, which catches the whole class.
+- **The right-click menu draws its labels as virtual text**, so reading the
+  floating buffer's lines shows blank rows and proves nothing. Read the
+  composited screen with `vim.fn.screenstring(row, col)` -- that is what the
+  terminal is told to draw. `tests/pty/run.sh` does, and asserts the menu's
+  contents cell by cell.
+- A SQL buffer gets **`kebab.menus.sql`**, not the editor menu: Run Statement
+  belongs at the top level of the menu you opened over a query, not two levels
+  down under "Database". `plugins/menu.lua` picks by filetype. Both sweeps walk
+  that menu too -- it is a flat list with leaves at the top level, so it is
+  walked directly rather than per section, and forgetting that would have left
+  its entries the only unchecked ones in the layer.
+- Menu entries advertise **buffer-local** keys (`]p`, `[p`, `[P`, `R` for the
+  pager): those go in `menu_shortcuts_spec`'s `BUFFER_LOCAL` with a reason, and
+  the sweep then asserts they are *not* mapped globally. Mapping `R` globally
+  to a database action would take an ordinary key from every buffer.
 - **A headless Neovim has no screen grid, so it cannot be clicked.**
   `nvim_input_mouse()` is dropped and `feedkeys("<2-LeftMouse>")` does nothing,
   both silently -- so a mouse test written headlessly passes by doing nothing.

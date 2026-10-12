@@ -424,6 +424,39 @@ end
 
 -- --------------------------------------------------------------- the tree
 
+---Run the whole buffer, however many statements it holds.
+function M.run_all()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  if not c then
+    return vim.notify("This buffer has no connection (<leader>Dc attaches one)", vim.log.levels.WARN)
+  end
+  local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+  if vim.trim(text) == "" then
+    return vim.notify("Nothing to run", vim.log.levels.WARN)
+  end
+  return M.run(c, text)
+end
+
+---Commands, so every one of these is reachable from the menu, from `:` and
+---from a keymap -- and so the menu sweep can check it points at something
+---real. A menu entry built on a bare closure is invisible to that sweep.
+function M.setup()
+  local commands = {
+    IdeDbRun = { M.run_current, "Run the statement under the cursor" },
+    IdeDbRunAll = { M.run_all, "Run every statement in this buffer" },
+    IdeDbNextPage = { function() M.turn_page(1) end, "Next page of rows" },
+    IdeDbPrevPage = { function() M.turn_page(-1) end, "Previous page of rows" },
+    IdeDbFirstPage = { M.first_page, "First page of rows" },
+    IdeDbRefreshPage = { M.refresh, "Re-run the current page" },
+  }
+  for name, spec in pairs(commands) do
+    vim.api.nvim_create_user_command(name, function()
+      spec[1]()
+    end, { desc = spec[2] })
+  end
+end
+
 ---The table name on a dadbod-ui tree line, or nil.
 ---
 ---Pure, so it is tested directly. The tree is drawn with icons and indentation

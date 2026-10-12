@@ -14,7 +14,14 @@ return {
           vim.cmd.exec('"normal! \\<RightMouse>"')
           local winid = vim.fn.getmousepos().winid
           local ft = winid ~= 0 and vim.bo[vim.api.nvim_win_get_buf(winid)].filetype or ""
-          local which = ft == "neo-tree" and "kebab.menus.tree" or "kebab.menus.editor"
+          -- A SQL buffer gets Run at the top level rather than two levels
+          -- down under "Database", which is not where anyone looks after
+          -- editing a query. The rows pane gets it too: that is where you are
+          -- when you want the next page.
+          local SQL = { sql = true, dbout = true, dbui = true, mysql = true, plsql = true }
+          local which = ft == "neo-tree" and "kebab.menus.tree"
+            or (SQL[ft] and "kebab.menus.sql")
+            or "kebab.menus.editor"
           require("menu").open(require(which), { mouse = true })
         end,
         mode = { "n", "v" },

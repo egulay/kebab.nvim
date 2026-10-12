@@ -22,6 +22,13 @@ local BUILTIN = {
 -- has to be the truth: these are checked for *absence* globally, so one that
 -- becomes global will fail here and have to be moved out of this table.
 local BUFFER_LOCAL = {
+  -- The pager lives on the two SQL panes only. Mapping ]p, [p, [P or R
+  -- globally would take four ordinary keys away from every buffer in the
+  -- editor -- R especially -- so kebab.dbide binds them per buffer.
+  ["]p"] = "kebab.dbide: bound on the statement and rows panes",
+  ["[p"] = "kebab.dbide: bound on the statement and rows panes",
+  ["[P"] = "kebab.dbide: bound on the statement and rows panes",
+  ["R"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>ca"] = "LSP: bound on LspAttach",
   ["<leader>cr"] = "LSP: bound on LspAttach",
   ["gd"] = "LSP: bound on LspAttach",
@@ -95,6 +102,7 @@ end
 for _, m in ipairs(menus) do
   walk(m.items, m.name .. " › ")
 end
+walk(require("kebab.menus.sql"), "sql › ")
 
 H.describe("menu shortcuts", function()
   H.it("every entry advertises one", function()
