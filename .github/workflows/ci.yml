@@ -68,8 +68,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      # Into /usr/local/bin, not $HOME/go/bin: bootstrap.sh runs the whole
+      # install in a throwaway HOME, so anything under the runner's own home
+      # is a coin toss. This way it is on PATH whoever we pretend to be.
       - name: gopls
-        run: go install golang.org/x/tools/gopls@latest
+        run: |
+          go install golang.org/x/tools/gopls@latest
+          sudo install -m 0755 "$(go env GOPATH)/bin/gopls" /usr/local/bin/gopls
+          gopls version
 
       # The runners ship rustup with *no default toolchain*, so `cargo` is on
       # PATH and fails when run: "rustup could not choose a version of cargo

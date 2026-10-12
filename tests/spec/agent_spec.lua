@@ -16,10 +16,26 @@ local function requires_go()
   if not usable then
     H.skip(why .. " -- go is needed for a project gopls will attach to")
   end
-  if not vim.uv.fs_stat(vim.fn.stdpath("data") .. "/mason/bin/gopls")
-    and vim.fn.executable("gopls") == 0 then
-    H.skip("gopls is not installed")
+  -- Run gopls, do not stat it -- and look where it actually lives.
+  --
+  -- Two ways to get this wrong, one of each already shipped. Statting a path
+  -- passed in CI against a binary mason had started installing and never
+  -- finished (nvim exits at the end of the plugin sync and kills the
+  -- install), and because mason *prepends* its bin directory to PATH that
+  -- stub shadows a working gopls: four tests then spent their whole 120s
+  -- attach budget each and failed with "no language server attached".
+  -- Checking only `$PATH` skips eleven tests on this machine, where gopls is
+  -- mason's and is not on the PATH the test process inherited.
+  local candidates = { vim.fn.stdpath("data") .. "/mason/bin/gopls", "gopls" }
+  local reasons = {}
+  for _, candidate in ipairs(candidates) do
+    local runs, reason = H.usable(candidate, { "version" })
+    if runs then
+      return
+    end
+    reasons[#reasons + 1] = reason
   end
+  H.skip("no usable gopls: " .. table.concat(reasons, "; "))
 end
 
 local function fixture()
@@ -148,7 +164,8 @@ H.describe("diagnostics", function()
   H.it("sorts by position, so the output is stable", function()
     requires_go()
     in_fixture(function()
-      local result = agent.query("diagnostics", { "main.go" })
+      local result, err = agent.query("diagnostics", { "main.go" })
+      H.ok(result, tostring(err))
       local previous = 0
       for _, d in ipairs(result.diagnostics) do
         H.ok(d.line >= previous, "diagnostics should be in file order")
@@ -160,7 +177,8 @@ H.describe("diagnostics", function()
   H.it("says whether the server had settled", function()
     requires_go()
     in_fixture(function()
-      local result = agent.query("diagnostics", { "main.go" })
+      local result, err = agent.query("diagnostics", { "main.go" })
+      H.ok(result, tostring(err))
       H.eq("boolean", type(result.settled),
         "a clean file and a slow server look alike; the caller deserves to know which")
     end)

@@ -29,9 +29,15 @@ fail() { printf '\nFAILED: %s\n' "$1" >&2; exit 1; }
 cleanup() {
   if [ "$keep" = "1" ]; then
     printf '\nkept: %s\n' "$work"
-  else
-    rm -rf "$work"
+    return
   fi
+  # Go's module cache is written read-only on purpose, so a plain `rm -rf`
+  # prints a "Permission denied" line *per file* -- three hundred of them in
+  # CI, after the test results, which is where the reader looks. The failure
+  # that mattered was the line above all that noise. Make it writable first,
+  # and say nothing either way: this is a temporary directory being removed.
+  chmod -R u+w "$work" >/dev/null 2>&1 || true
+  rm -rf "$work" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -81,6 +87,25 @@ nvim --headless -n "+Lazy! sync" +qa 2>&1 | tail -20
 # Lazy writes nothing to stdout on success, so the check is the lockfile
 test -f "$XDG_CONFIG_HOME/nvim/lazy-lock.json" || fail "lazy installed nothing"
 printf 'plugins installed: %s\n' "$(grep -c '": {' "$XDG_CONFIG_HOME/nvim/lazy-lock.json")"
+
+# mason.nvim *prepends* its bin directory to PATH, and `nvim +Lazy! sync +qa`
+# exits while its installs are still running -- it says so: "Neovim is exiting
+# while packages are still installing. Terminating all installations". Whatever
+# that leaves behind shadows the real tool: a half-installed gopls made four
+# specs wait out their 120s attach budget and fail with "no language server
+# attached", which names neither mason nor the install it aborted. Anything in
+# there that cannot answer `--version` is removed.
+say "pruning anything mason left half-installed"
+pruned=0
+for binary in "$XDG_DATA_HOME"/nvim/mason/bin/*; do
+  [ -e "$binary" ] || continue
+  if ! "$binary" --version >/dev/null 2>&1 && ! "$binary" version >/dev/null 2>&1; then
+    rm -f "$binary"
+    pruned=$((pruned + 1))
+    printf '  removed %s (it does not run)\n' "$(basename "$binary")"
+  fi
+done
+printf 'pruned: %d\n' "$pruned"
 
 say "every plugin this layer reaches into, at the commit it was pinned to"
 for pin in $(grep -rhoE '[0-9a-f]{40}' "$root/lua/kebab/plugins/"*.lua | sort -u); do

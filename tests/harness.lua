@@ -85,9 +85,29 @@ end
 ---@param exe string
 ---@param args? string[] overrides the liveness check
 ---@return boolean usable, string|nil why
+-- exe .. args -> { usable, why }. A guard is called once per test, so eleven
+-- tests asking the same question would otherwise spawn twenty-two processes
+-- to learn the same two facts.
+local usable_cache = {}
+
 function H.usable(exe, args)
+  local key = exe .. " " .. table.concat(args or {}, " ")
+  local cached = usable_cache[key]
+  if cached then
+    return cached[1], cached[2]
+  end
+  local ok, why = H.probe_usable(exe, args)
+  usable_cache[key] = { ok, why }
+  return ok, why
+end
+
+---@see H.usable -- this is the uncached half
+function H.probe_usable(exe, args)
   if vim.fn.executable(exe) == 0 then
-    return false, exe .. " is not on PATH"
+    -- `executable()` answers for an absolute path too, so this covers both a
+    -- name on PATH and a tool installed somewhere a test knows about (mason's
+    -- bin directory, which is not on the PATH a test process inherited).
+    return false, ("%s is not %s"):format(exe, exe:find("/") and "there" or "on PATH")
   end
   local LIVENESS = { go = { "version" } }
   local cmd = { exe }
