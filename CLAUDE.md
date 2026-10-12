@@ -603,11 +603,25 @@ only because they are real paths on this machine.
 
 **No real project names.** This repo is public, so nothing in it names any of
 the author's own or client projects -- not in the README, not in CLAUDE.md, not
-in a test fixture. Docs describe a project by its *type* ("a Spring Boot
-project"); fixtures use obviously synthetic names (`alpha-api`, `alpha-cli`,
-`sample-app`, `com.example.*`). This was asked for twice: real names had leaked
-into the README, this file and four specs, and renaming them to a shared prefix
-still left the original shape visible.
+in a test fixture, **and not in a commit message**. Docs describe a project by
+its *type* ("a Spring Boot project"); fixtures use obviously synthetic names
+(`alpha-api`, `alpha-cli`, `sample-app`, `shop_local`, `inventory.stock_item`,
+`com.example.*`). A measurement taken against a real database is reported with
+the fixture's names, never the real ones.
+
+This was asked for three times and broken three times. The third time put a
+client's project name in the public README and in four commit messages, and
+cost the user deleting and recreating the remote repository. **It is checked
+now, not remembered**: `tests/spec/house_spec.lua` scans every tracked file
+*and every commit message* against a list of forbidden terms kept **outside**
+the repo -- `$KEBAB_PRIVATE_NAMES`, or `~/.config/kebab/private-names`, one
+term per line. The list cannot live in the repo, because the list is the leak.
+Without that file the spec skips, so the suite still runs for anyone else. A
+failure names the file and line but **redacts the term** (`KEBAB_PRIVATE_SHOW=1`
+to see it), so a CI log cannot leak what is being checked for.
+
+Terms there are substrings and case-insensitive, so they have to be long enough
+not to match ordinary words: `rpa` matches "counterpart".
 
 ## Tests
 
