@@ -20,6 +20,17 @@ vim.g.kebab_jdbc_dir = vim.fn.tempname() .. "-jars"
 local db = require("kebab.db")
 local jdbc = require("kebab.jdbc")
 
+-- Checks that do not apply to this database, by name. ClickHouse has no
+-- foreign keys and its primary key is an ordering key DatabaseMetaData does
+-- not report, so three checks would fail for reasons that are not faults. They
+-- are named here rather than made conditional in the check itself: "if the
+-- driver says nothing, call it fine" is what hid the empty structure panel on
+-- Oracle.
+local skip = {}
+for name in (vim.env.SKIP or ""):gmatch("[^,%s]+") do
+  skip[name] = true
+end
+
 local pass, fail = 0, 0
 local function ok(what)
   pass = pass + 1
@@ -28,6 +39,15 @@ end
 local function bad(what, why)
   fail = fail + 1
   io.write(("FAIL %s\n     %s\n"):format(what, tostring(why or "")))
+end
+---@param key string the name in $SKIP
+---@param why string what this database does instead
+local function skipped(key, why)
+  if not skip[key] then
+    return false
+  end
+  io.write(("skip %s (%s)\n"):format(key, why))
+  return true
 end
 ---@param what string
 ---@param got any
@@ -120,10 +140,16 @@ do
   else
     local text = table.concat(lines, "\n")
     want_match("structure: the columns", text, "label")
-    want_match("structure: the primary key", text, "id")
-    want_match("structure: the index", text, "ix_kebab_items_label")
+    if not skipped("pk", "its primary key is an ordering key, not reported as one") then
+      want_match("structure: the primary key", text, "id")
+    end
+    if not skipped("index", "no secondary indexes in the metadata") then
+      want_match("structure: the index", text, "ix_kebab_items_label")
+    end
     -- the other direction: kebab_lines references this table
-    want_match("structure: what references it", text, "kebab_lines")
+    if not skipped("referenced", "this database has no foreign keys") then
+      want_match("structure: what references it", text, "kebab_lines")
+    end
   end
 end
 

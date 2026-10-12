@@ -118,10 +118,19 @@ a formatter -- which on reflection is the feature rather than a flaw.
   views returned *unqualified*, because MySQL keeps its internals in a catalog
   rather than a schema and the filter was looking at the wrong field.
 
-  **ClickHouse is the one left**: registered and dialect-complete, never run
-  against a server, and labelled that way in the README. Deliberate: its SQL
-  is unusual enough that the fixture would be testing itself, and nothing in
-  these stacks uses it.
+  ClickHouse is checked too, and it was the most expensive one: its shaded
+  driver jar does not bundle slf4j, so both driver classes failed to
+  initialise and the JDBC service loader swallowed it ("No suitable driver for
+  this URL. Drivers on the classpath: (none)" -- which reads as a URL
+  problem); the shaded jar needs a Maven *classifier*, which coordinates could
+  not express; and against a current server the driver's default compression
+  fails every query with "Invalid LZ4 magic byte", so the URL template carries
+  `compress=0`. Two of its checks are skipped by name with the reason printed:
+  no foreign keys, and a data skipping index that JDBC does not report as an
+  index.
+
+  All nine registered drivers are checked now. What is still unexercised is
+  *versions*: one server version each, the newest at the time.
 - ~~**Startup time has never been measured.**~~ Measured: **21.8 ms** median
   with the full layer against **3.4 ms** for bare `nvim -u NONE`, so the layer
   costs about 18 ms despite 80-odd plugins -- lazy loading is doing its job.

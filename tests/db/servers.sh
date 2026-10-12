@@ -22,10 +22,12 @@
 #              there is no excuse for leaving them unexercised.
 #   container  PostgreSQL, MySQL, MariaDB, SQL Server, Oracle.
 #
-# Not here: ClickHouse. It is registered and dialect-complete, and labelled
-# untested in the README -- its SQL is unusual enough that a check would be
-# testing the fixture as much as the layer, and nothing in this project's
-# stacks uses it. That is a decision, recorded, not an oversight.
+# ClickHouse is here too, and it is the one that needs its expectations
+# stated: it has no foreign keys, and its primary key is an ordering key that
+# DatabaseMetaData does not report as one. Those three checks are skipped by
+# name through $SKIP rather than quietly passing -- a check that cannot fail is
+# worse than no check, and a blanket "if the driver says nothing, call it fine"
+# would have hidden the empty structure panel on Oracle.
 #
 # It is not part of ./tests/run.sh: it pulls images and takes minutes. It is
 # what gets run before claiming a driver works.
@@ -40,7 +42,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 keep=${KEBAB_DB_KEEP:-0}
 work=$(mktemp -d -t kebab-db-XXXXXX)
 
-ALL="h2 duckdb sqlite postgres mysql mariadb sqlserver oracle"
+ALL="h2 duckdb sqlite postgres mysql mariadb sqlserver oracle clickhouse"
 
 if [ "${1:-}" = "--list" ]; then
   printf '%s\n' $ALL
@@ -58,7 +60,7 @@ wanted() { case " $want " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 cleanup() {
   rm -rf "$work"
   if [ "$keep" != "1" ]; then
-    docker rm -f kebab-mssql kebab-oracle kebab-mysql kebab-mariadb kebab-pg >/dev/null 2>&1
+    docker rm -f kebab-mssql kebab-oracle kebab-mysql kebab-mariadb kebab-pg kebab-clickhouse >/dev/null 2>&1
   else
     printf '\ncontainers left running (KEBAB_DB_KEEP=1)\n'
   fi
@@ -74,6 +76,7 @@ export KEBAB_TEST_ORACLE_PW="$(rand_pw)"
 export KEBAB_TEST_MYSQL_PW="$(rand_pw)"
 export KEBAB_TEST_MARIADB_PW="$(rand_pw)"
 export KEBAB_TEST_PG_PW="$(rand_pw)"
+export KEBAB_TEST_CLICKHOUSE_PW="$(rand_pw)"
 
 # ---------------------------------------------------------------- the runner
 
@@ -96,7 +99,7 @@ JSON
   chmod 600 "$store"
   printf '%s' "$seed" > "$work/$name.seed.sql"
 
-  KEBAB_DB_STORE="$store" SEED="$work/$name.seed.sql" CONN="$name" \
+  KEBAB_DB_STORE="$store" SEED="$work/$name.seed.sql" CONN="$name" SKIP="${SKIP:-}" \
     nvim -n --headless --cmd "set runtimepath+=$root" \
       -c "luafile $root/tests/db/checks.lua" -c "qa!" 2>&1 | sed 's/^/  /'
   # The Lua side exits non-zero through `cq` when one of its checks fails.
@@ -107,6 +110,15 @@ JSON
   fi
 }
 
+# Wait for a line in a container's log. Fine for a server that prints one
+# *once* -- and a trap for one that does not: both the MySQL and MariaDB images
+# start a temporary server to initialise the data directory, so "ready for
+# connections" appears, then the temporary server is stopped, and only then
+# does the real one start. Connecting on the first match gets "unexpected end
+# of stream, read 0 bytes (socket was closed by server)", which reads as a
+# driver fault. Those two use wait_for_cmd with a client ping instead; MySQL
+# only ever passed here because its temporary server runs with
+# --skip-networking, so the port in the pattern happened to exclude it.
 wait_for_log() { # container pattern seconds label
   local name=$1
   local pattern=$2
@@ -136,6 +148,32 @@ wait_for_log() { # container pattern seconds label
 #
 # $1 container name, $2 the container's own password variable, $3 the
 # KEBAB_TEST_* variable the checks read, then the docker arguments.
+# Wait until a command succeeds, for a server that does not announce itself in
+# its container log.
+#
+# ClickHouse is why: it logs to files *inside* the container
+# (/var/log/clickhouse-server/), so `docker logs` carries the entrypoint's
+# chatter and nothing about being ready -- a log-pattern wait can only ever
+# time out. Its HTTP /ping is the documented check.
+wait_for_cmd() { # label seconds command...
+  local label=$1
+  local budget=$2
+  shift 2
+  printf '  waiting for %s' "$label"
+  local waited=0
+  while [ "$waited" -lt "$budget" ]; do
+    if "$@" >/dev/null 2>&1; then
+      printf ' up\n'
+      return 0
+    fi
+    printf '.'
+    sleep 2
+    waited=$((waited + 2))
+  done
+  printf ' timed out\n'
+  return 1
+}
+
 container() { # name pw-var-in-container pw-var-for-checks docker-args...
   local name=$1
   local inside=$2
@@ -218,7 +256,9 @@ if wanted mysql; then
   if container kebab-mysql MYSQL_ROOT_PASSWORD KEBAB_TEST_MYSQL_PW \
       -e "MYSQL_ROOT_PASSWORD=$KEBAB_TEST_MYSQL_PW" -e MYSQL_DATABASE=kebabtest \
       -p 13306:3306 mysql:8.4 \
-    && wait_for_log kebab-mysql "ready for connections.*port: 3306" 120 MySQL; then
+    && wait_for_cmd MySQL 180 \
+        docker exec kebab-mysql mysqladmin --protocol=TCP -h127.0.0.1 -uroot \
+          "-p$KEBAB_TEST_MYSQL_PW" ping; then
     run_checks mysql "jdbc:mysql://localhost:13306/kebabtest" "root" "KEBAB_TEST_MYSQL_PW" \
       "create table kebab_items (id int auto_increment primary key, label varchar(50) not null, qty int);
        insert into kebab_items (label, qty) values ('alpha', 1), ('beta', 2), ('gamma', 3);
@@ -234,7 +274,9 @@ if wanted mariadb; then
   if container kebab-mariadb MARIADB_ROOT_PASSWORD KEBAB_TEST_MARIADB_PW \
       -e "MARIADB_ROOT_PASSWORD=$KEBAB_TEST_MARIADB_PW" -e MARIADB_DATABASE=kebabtest \
       -p 13307:3306 mariadb:11 \
-    && wait_for_log kebab-mariadb "ready for connections" 120 MariaDB; then
+    && wait_for_cmd MariaDB 180 \
+        docker exec kebab-mariadb mariadb-admin --protocol=TCP -h127.0.0.1 -uroot \
+          "-p$KEBAB_TEST_MARIADB_PW" ping; then
     run_checks mariadb "jdbc:mariadb://localhost:13307/kebabtest" "root" "KEBAB_TEST_MARIADB_PW" \
       "create table kebab_items (id int auto_increment primary key, label varchar(50) not null, qty int);
        insert into kebab_items (label, qty) values ('alpha', 1), ('beta', 2), ('gamma', 3);
@@ -278,6 +320,30 @@ if wanted oracle; then
        create table kebab_lines (id number primary key, item_id number not null references kebab_items(id));"
   else
     bad "Oracle did not start" "see docker logs kebab-oracle"
+  fi
+fi
+
+if wanted clickhouse; then
+  say "ClickHouse"
+  # MergeTree, and an ORDER BY in place of a primary key -- which the driver
+  # *does* report as one, so that check is asserted like everywhere else. Two
+  # do not apply: ClickHouse has no foreign keys, and its data skipping index
+  # is not a SQL index -- the fixture declares one and getIndexInfo still
+  # reports nothing, which is the driver telling the truth about a different
+  # kind of object.
+  if container kebab-clickhouse CLICKHOUSE_PASSWORD KEBAB_TEST_CLICKHOUSE_PW \
+      -e "CLICKHOUSE_PASSWORD=$KEBAB_TEST_CLICKHOUSE_PW" -e CLICKHOUSE_DB=kebabtest \
+      -e CLICKHOUSE_USER=kebab -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+      -p 18123:8123 clickhouse/clickhouse-server:latest \
+    && wait_for_cmd ClickHouse 120 curl -fsS -m 3 "http://localhost:18123/ping"; then
+    SKIP="index,referenced" \
+    run_checks clickhouse "jdbc:clickhouse://localhost:18123/kebabtest?compress=0" "kebab" "KEBAB_TEST_CLICKHOUSE_PW" \
+      "create table kebab_items (id UInt32, label String, qty Int32,
+         index ix_kebab_items_label label type set(0) granularity 1) engine = MergeTree order by id;
+       insert into kebab_items values (1, 'alpha', 1), (2, 'beta', 2), (3, 'gamma', 3);
+       create table kebab_lines (id UInt32, item_id UInt32) engine = MergeTree order by id;"
+  else
+    bad "ClickHouse did not start" "see docker logs kebab-clickhouse"
   fi
 fi
 

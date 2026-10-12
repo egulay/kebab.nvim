@@ -87,8 +87,29 @@ local BUILTIN = {
   {
     key = "clickhouse",
     label = "ClickHouse",
-    coords = { "com.clickhouse:clickhouse-jdbc" },
-    url = "jdbc:clickhouse://{host}:{port}/{database}",
+    -- Two things here, both found by connecting to a real server:
+    --
+    -- The `all` classifier, not the plain jar: clickhouse-jdbc's own jar
+    -- carries none of its dependencies. The shaded one is what ClickHouse
+    -- publishes for exactly this.
+    --
+    -- And the shaded jar still does not bundle slf4j, so *both* driver
+    -- classes its service file names fail to initialise with
+    -- NoClassDefFoundError: org/slf4j/LoggerFactory -- which the JDBC service
+    -- loader swallows. The symptom is "No suitable driver for this URL.
+    -- Drivers on the classpath: (none)", which reads as a URL problem and is
+    -- a missing logging facade. slf4j-nop comes along so the driver does not
+    -- write "no providers were found" to stderr on every query.
+    coords = {
+      "com.clickhouse:clickhouse-jdbc::all",
+      "org.slf4j:slf4j-api",
+      "org.slf4j:slf4j-nop",
+    },
+    -- `compress=0`, and it is not optional: against a current server the
+    -- driver's default compression fails every query with "Invalid LZ4 magic
+    -- byte", including the connection test. Measured against ClickHouse
+    -- 26.9 with driver 0.10.0 -- plain URL fails, `?compress=0` returns rows.
+    url = "jdbc:clickhouse://{host}:{port}/{database}?compress=0",
     default_port = 8123,
   },
 }
@@ -215,29 +236,79 @@ function M.cache_dir()
     or (vim.fn.stdpath("data") .. "/kebab/jdbc")
 end
 
----Split "group:artifact" or "group:artifact:version".
+---Split a coordinate.
+---
+---`group:artifact`, `group:artifact:version`, and either of those with a
+---classifier: `group:artifact::all` or `group:artifact:0.8.6:all`. The
+---classifier exists for a driver whose plain jar is not self-contained --
+---ClickHouse publishes its dependencies shaded into `clickhouse-jdbc-<v>-all`
+---and the thin jar cannot connect at all.
 ---@param coord string
----@return string|nil group, string|nil artifact, string|nil version
+---@return string|nil group, string|nil artifact, string|nil version, string|nil classifier
 function M.parse_coord(coord)
   local parts = vim.split(coord or "", ":", { plain = true })
   if #parts < 2 or parts[1] == "" or parts[2] == "" then
-    return nil, nil, nil
+    return nil, nil, nil, nil
   end
-  return parts[1], parts[2], (parts[3] ~= "" and parts[3] or nil)
+  local version = (parts[3] ~= "" and parts[3]) or nil
+  local classifier = (parts[4] ~= "" and parts[4]) or nil
+  if classifier and not classifier:match("^[%w][%w%-_%.]*$") then
+    -- it becomes part of a URL and a filename, like the version
+    return nil, nil, nil, nil
+  end
+  return parts[1], parts[2], version, classifier
 end
 
 ---Where a jar is cached, mirroring Maven's own layout so it is recognisable.
-function M.jar_path(group, artifact, version)
-  return ("%s/jars/%s/%s/%s/%s-%s.jar")
-    :format(M.cache_dir(), group:gsub("%.", "/"), artifact, version, artifact, version)
+---@param classifier? string
+function M.jar_path(group, artifact, version, classifier)
+  return ("%s/jars/%s/%s/%s/%s-%s%s.jar")
+    :format(M.cache_dir(), group:gsub("%.", "/"), artifact, version, artifact, version,
+      classifier and ("-" .. classifier) or "")
 end
 
-function M.maven_url(group, artifact, version)
-  return ("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s.jar")
-    :format(group:gsub("%.", "/"), artifact, version, artifact, version)
+---@param classifier? string e.g. "all" for a shaded jar
+function M.maven_url(group, artifact, version, classifier)
+  return ("https://repo1.maven.org/maven2/%s/%s/%s/%s-%s%s.jar")
+    :format(group:gsub("%.", "/"), artifact, version, artifact, version,
+      classifier and ("-" .. classifier) or "")
 end
 
 -- ----------------------------------------------------------------- download
+
+---Is this a release candidate, a milestone, a beta or a snapshot?
+---
+---Maven's `<release>` field is "the most recently published version", which on
+---at least one driver here is a release candidate. A JDBC driver chosen by
+---this layer, silently, should be one its publisher calls finished.
+---@param version string
+---@return boolean
+function M.is_prerelease(version)
+  local lower = tostring(version):lower()
+  for _, marker in ipairs({
+    "%-rc", "%-alpha", "%-beta", "%-m%d", "%-snapshot", "%-cr%d", "%-preview",
+    "%-dev", "%-ea", "%.rc", "%.alpha", "%.beta",
+  }) do
+    if lower:find(marker) then
+      return true
+    end
+  end
+  return false
+end
+
+---The newest stable version in a maven-metadata.xml body, in publication
+---order -- which is the order Maven writes `<version>` elements in.
+---@param body string
+---@return string|nil
+function M.newest_stable(body)
+  local newest
+  for version in tostring(body):gmatch("<version>([^<]+)</version>") do
+    if not M.is_prerelease(version) and M.is_version(version) then
+      newest = version
+    end
+  end
+  return newest
+end
 
 ---The newest release of an artifact, from Maven's own metadata.
 ---@param group string
@@ -250,8 +321,17 @@ function M.latest_version(group, artifact)
   if res.code ~= 0 then
     return nil, ("Could not reach Maven Central for %s:%s"):format(group, artifact)
   end
-  local version = (res.stdout or ""):match("<release>([^<]+)</release>")
-    or (res.stdout or ""):match("<latest>([^<]+)</latest>")
+  -- `<release>` is whatever was published last, and that is not the same as
+  -- the newest *release*: ClickHouse's metadata answered `0.11.0-rc1`, so
+  -- every ClickHouse connection would have run on a release candidate nobody
+  -- chose. The newest stable version in the list is taken instead, and
+  -- `<release>` is only trusted when it is one.
+  local body = res.stdout or ""
+  local version = M.newest_stable(body)
+    or (not M.is_prerelease(body:match("<release>([^<]+)</release>") or "x-rc1")
+      and body:match("<release>([^<]+)</release>"))
+    or (not M.is_prerelease(body:match("<latest>([^<]+)</latest>") or "x-rc1")
+      and body:match("<latest>([^<]+)</latest>"))
   if not version then
     return nil, ("No released version found for %s:%s"):format(group, artifact)
   end
@@ -280,12 +360,12 @@ local resolved = {}
 
 ---Resolve a coordinate to a concrete version.
 function M.resolve(coord)
-  local group, artifact, version = M.parse_coord(coord)
+  local group, artifact, version, classifier = M.parse_coord(coord)
   if not group then
     return nil, ("%q is not a Maven coordinate"):format(tostring(coord))
   end
   if version then
-    return { group = group, artifact = artifact, version = version }
+    return { group = group, artifact = artifact, version = version, classifier = classifier }
   end
   if resolved[coord] then
     return resolved[coord]
@@ -299,7 +379,7 @@ function M.resolve(coord)
     while true do
       local name, typ = vim.uv.fs_scandir_next(fd)
       if not name then break end
-      if typ == "directory" and vim.uv.fs_stat(M.jar_path(group, artifact, name)) then
+      if typ == "directory" and vim.uv.fs_stat(M.jar_path(group, artifact, name, classifier)) then
         -- Compare: readdir order is filesystem-dependent, so taking the last
         -- entry can pin an old driver for the whole session -- and once it is
         -- memoized, M.installed() reports success and no network lookup ever
@@ -310,7 +390,7 @@ function M.resolve(coord)
       end
     end
     if newest then
-      resolved[coord] = { group = group, artifact = artifact, version = newest }
+      resolved[coord] = { group = group, artifact = artifact, version = newest, classifier = classifier }
       return resolved[coord]
     end
   end
@@ -318,7 +398,7 @@ function M.resolve(coord)
   if not latest then
     return nil, err
   end
-  resolved[coord] = { group = group, artifact = artifact, version = latest }
+  resolved[coord] = { group = group, artifact = artifact, version = latest, classifier = classifier }
   return resolved[coord]
 end
 
@@ -376,7 +456,7 @@ function M.fetch_jar(coord)
   if not spec then
     return nil, err
   end
-  local path = M.jar_path(spec.group, spec.artifact, spec.version)
+  local path = M.jar_path(spec.group, spec.artifact, spec.version, spec.classifier)
   if vim.uv.fs_stat(path) then
     return path
   end
@@ -384,7 +464,7 @@ function M.fetch_jar(coord)
     return nil, ("%s:%s has an implausible version: %q"):format(spec.group, spec.artifact, tostring(spec.version))
   end
   vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-  local url = M.maven_url(spec.group, spec.artifact, spec.version)
+  local url = M.maven_url(spec.group, spec.artifact, spec.version, spec.classifier)
   local tmp = path .. ".part"
   local res = vim.system(
     -- --proto/--proto-redir: without them an https -> http redirect is
@@ -481,17 +561,17 @@ end
 ---Is every jar for `driver` already cached?
 function M.installed(driver)
   for _, coord in ipairs(driver.coords or {}) do
-    local group, artifact, version = M.parse_coord(coord)
+    local group, artifact, version, classifier = M.parse_coord(coord)
     if not group then
       return false
     end
     if version then
-      if not vim.uv.fs_stat(M.jar_path(group, artifact, version)) then
+      if not vim.uv.fs_stat(M.jar_path(group, artifact, version, classifier)) then
         return false
       end
     else
       local spec = resolved[coord]
-      if spec and vim.uv.fs_stat(M.jar_path(spec.group, spec.artifact, spec.version)) then
+      if spec and vim.uv.fs_stat(M.jar_path(spec.group, spec.artifact, spec.version, spec.classifier)) then
         -- cached
       else
         local dir = ("%s/jars/%s/%s"):format(M.cache_dir(), group:gsub("%.", "/"), artifact)
@@ -500,7 +580,7 @@ function M.installed(driver)
         while fd do
           local name, typ = vim.uv.fs_scandir_next(fd)
           if not name then break end
-          if typ == "directory" and vim.uv.fs_stat(M.jar_path(group, artifact, name)) then
+          if typ == "directory" and vim.uv.fs_stat(M.jar_path(group, artifact, name, classifier)) then
             found = true
           end
         end
@@ -603,6 +683,13 @@ end
 ---@return string
 function M.hint(err)
   err = err or ""
+  if err:find("Invalid LZ4 magic byte", 1, true) then
+    return err
+      .. "\nThat is the ClickHouse driver's compression, not the data: against a"
+      .. "\ncurrent server its default fails every query. Add compress=0 to the"
+      .. "\nURL -- jdbc:clickhouse://host:8123/db?compress=0 -- which is what"
+      .. "\nthis layer's own template does."
+  end
   if err:find('invalid value for parameter "TimeZone"', 1, true) then
     return err
       .. "\nThat is the JVM's own default zone, which this server does not know."

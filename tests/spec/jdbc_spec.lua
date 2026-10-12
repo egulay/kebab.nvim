@@ -1060,3 +1060,96 @@ H.describe("a warm process and the credentials it was started with", function()
     H.ok(ok, tostring(err))
   end)
 end)
+
+-- Choosing a version, and a jar that is not the plain one.
+--
+-- Both came out of connecting to a real ClickHouse: `<release>` in Maven's
+-- metadata is "the most recently published version", which for that driver is
+-- a release candidate and for slf4j-api an alpha -- so every connection would
+-- have run on a prerelease nobody chose. And its shaded jar is published under
+-- a classifier, which a `group:artifact` coordinate could not express.
+H.describe("picking a driver version", function()
+  local J = require("kebab.jdbc")
+
+  H.it("knows a prerelease when it sees one", function()
+    for _, version in ipairs({
+      "0.11.0-rc1", "2.1.0-alpha1", "1.0.0-beta", "3.0.0-M1", "1.2.3-SNAPSHOT",
+      "5.0.0-preview", "1.0.0-CR2", "2.0.0.rc1",
+    }) do
+      H.ok(J.is_prerelease(version), version .. " is not a release")
+    end
+    for _, version in ipairs({ "0.10.0", "8.0.33", "42.6.0", "2.0.20", "12.8.1.jre11", "1.2.3.4" }) do
+      H.falsy(J.is_prerelease(version), version .. " is a release")
+    end
+  end)
+
+  H.it("takes the newest stable version out of Maven's metadata", function()
+    local body = table.concat({
+      "<metadata><versioning><release>0.11.0-rc1</release><versions>",
+      "<version>0.9.9</version><version>0.10.0-rc1</version>",
+      "<version>0.10.0</version><version>0.11.0-rc1</version>",
+      "</versions></versioning></metadata>",
+    })
+    H.eq("0.10.0", J.newest_stable(body), "the rc must not win")
+  end)
+
+  H.it("answers nil when an artifact has only prereleases", function()
+    H.eq(nil, J.newest_stable("<versions><version>1.0.0-rc1</version></versions>"))
+  end)
+
+  H.it("ignores a version that does not look like one", function()
+    -- the same guard as elsewhere: this string becomes a path and a URL
+    H.eq("1.0.0", J.newest_stable(
+      "<versions><version>1.0.0</version><version>../../../etc/passwd</version></versions>"))
+  end)
+end)
+
+H.describe("a coordinate with a classifier", function()
+  local J = require("kebab.jdbc")
+
+  H.it("parses all four shapes", function()
+    local g, a, v, c = J.parse_coord("org.postgresql:postgresql")
+    H.eq({ "org.postgresql", "postgresql" }, { g, a })
+    H.eq(nil, v)
+    H.eq(nil, c)
+
+    g, a, v, c = J.parse_coord("com.clickhouse:clickhouse-jdbc::all")
+    H.eq("all", c, "an empty version with a classifier means latest + classifier")
+    H.eq(nil, v)
+
+    g, a, v, c = J.parse_coord("com.clickhouse:clickhouse-jdbc:0.10.0:all")
+    H.eq({ "0.10.0", "all" }, { v, c })
+  end)
+
+  H.it("refuses a classifier that is not one", function()
+    -- it becomes part of a filename and a URL, like the version
+    H.eq(nil, (J.parse_coord("g:a:1.0:../../etc")))
+    H.eq(nil, (J.parse_coord("g:a:1.0:with space")))
+  end)
+
+  H.it("puts it in the URL and the cached path", function()
+    H.matches("clickhouse%-jdbc%-0%.10%.0%-all%.jar$",
+      J.maven_url("com.clickhouse", "clickhouse-jdbc", "0.10.0", "all"))
+    H.matches("clickhouse%-jdbc%-0%.10%.0%-all%.jar$",
+      J.jar_path("com.clickhouse", "clickhouse-jdbc", "0.10.0", "all"))
+    H.matches("postgresql%-42%.6%.0%.jar$", J.maven_url("org.postgresql", "postgresql", "42.6.0"),
+      "without one, nothing changes")
+  end)
+
+  H.it("is what the ClickHouse driver is registered with", function()
+    local driver = J.driver("clickhouse")
+    H.ok(driver ~= nil, "clickhouse should be registered")
+    local coords = table.concat(driver.coords, " ")
+    H.matches("clickhouse%-jdbc::all", coords, "the plain jar carries no dependencies")
+    -- and the two that stop the service loader swallowing the driver
+    H.matches("org%.slf4j:slf4j%-api", coords)
+    H.matches("compress=0", driver.url,
+      "without it every query fails with Invalid LZ4 magic byte")
+  end)
+
+  H.it("explains the LZ4 error rather than passing it on", function()
+    local hinted = J.hint("java.sql.SQLException: Invalid LZ4 magic byte: '-112'")
+    H.matches("compress=0", hinted)
+    H.matches("Invalid LZ4 magic byte", hinted, "the original error is still in there")
+  end)
+end)
