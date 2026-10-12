@@ -551,6 +551,46 @@ function M.ensure(url)
   return table.concat(parts, ":")
 end
 
+---Append the fix to a failure whose message does not name its real cause.
+---
+---A driver reports the server's complaint verbatim, and the server has no idea
+---which client sent it. "invalid value for parameter \"TimeZone\"" names
+---neither the JVM nor the machine's timezone, so it reads as a database fault.
+---@param err string
+---@return string
+function M.hint(err)
+  err = err or ""
+  if err:find('invalid value for parameter "TimeZone"', 1, true) then
+    return err
+      .. "\nThat is the JVM's own default zone, which this server does not know."
+      .. "\nSet vim.g.kebab_jdbc_timezone to a canonical name, or fix it for every"
+      .. "\nprogram on the machine with: timedatectl set-timezone <Area/Location>"
+  end
+  return err
+end
+
+---The zone to run the JVM in, or nil to leave it to the JVM.
+---
+---The PostgreSQL driver sends the JVM's default zone id in its startup packet,
+---and a server whose tzdata lacks the backward-compatibility links rejects a
+---legacy alias outright: `FATAL: invalid value for parameter "TimeZone":
+---"Turkey"`. A machine set to one of those aliases -- systemd will happily
+---take `timedatectl set-timezone Turkey` -- therefore cannot reach its own
+---Postgres through any JDBC client, with an error that names neither the
+---client nor the real cause. `vim.g.kebab_jdbc_timezone = "Europe/Istanbul"`
+---passes a canonical name instead.
+---
+---Not defaulted: guessing a canonical zone needs the alias table, and getting
+---it wrong would move every timestamp the server renders.
+---@return string|nil
+function M.timezone()
+  local tz = vim.g.kebab_jdbc_timezone
+  if type(tz) == "string" and vim.trim(tz) ~= "" then
+    return vim.trim(tz)
+  end
+  return nil
+end
+
 ---The argv that runs `mode` against `url`. SQL goes in on stdin.
 ---@param url string
 ---@param mode "query"|"tables"|"columns"|"schema"|"ping"
@@ -565,7 +605,12 @@ function M.command(url, mode, extra)
   -- URL can carry inline credentials (jdbc:...?user=x&password=y). The JVM
   -- reads it from KEBAB_DB_URL, which every spawn path sets through
   -- M.credentials_env.
-  local argv = { "java", "-cp", classpath, "KebabJdbc", mode, "-" }
+  local argv = { "java" }
+  local tz = M.timezone()
+  if tz then
+    argv[#argv + 1] = "-Duser.timezone=" .. tz
+  end
+  vim.list_extend(argv, { "-cp", classpath, "KebabJdbc", mode, "-" })
   for _, a in ipairs(extra or {}) do
     argv[#argv + 1] = a
   end
@@ -643,7 +688,7 @@ function M.run_oneshot(url, mode, opts)
     env = M.spawn_env(url),
   }):wait(opts.timeout or 120000)
   if res.code ~= 0 then
-    return nil, vim.trim((res.stderr or "") .. (res.stdout or ""))
+    return nil, M.hint(vim.trim((res.stderr or "") .. (res.stdout or "")))
   end
   return to_lines(res.stdout)
 end
@@ -826,8 +871,8 @@ local function start_daemon(url)
         daemons[url] = nil
       end
       while #d.queue > 0 do
-        deliver(d, false, ("the JDBC process exited (%s)%s"):format(
-          tostring(code), d.stderr_text ~= "" and ("\n" .. d.stderr_text) or ""))
+        deliver(d, false, M.hint(("the JDBC process exited (%s)%s"):format(
+          tostring(code), d.stderr_text ~= "" and ("\n" .. d.stderr_text) or "")))
       end
       for _, h in ipairs({ d.stdout, d.stderr, d.stdin, d.handle }) do
         pcall(function()

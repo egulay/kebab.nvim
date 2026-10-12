@@ -213,6 +213,17 @@ environment variable to read it from:
 ] }
 ```
 
+Pointing `password_env` at a name an existing project already exports — a
+`.env` file it ships with — means sourcing that file is all the setup there is.
+
+If a server rejects the connection with `FATAL: invalid value for parameter
+"TimeZone"`, the machine's timezone is a legacy alias (`timedatectl show -p
+Timezone` answering `Turkey`, `Japan`, `Poland`, anything without a `/`). The
+JVM repeats that name verbatim and a server whose tzdata has no
+backward-compatibility links refuses it. Set
+`vim.g.kebab_jdbc_timezone = "Europe/Istanbul"` — or fix it for every program
+on the machine with `timedatectl set-timezone <Area/Location>`.
+
 Completion knows tables, `customers.` → that table's columns with their types,
 and aliases (`select c. from customers c`). It is a separate blink source from
 `vim-dadbod-completion`, which covers table prefixes and aliases but not the

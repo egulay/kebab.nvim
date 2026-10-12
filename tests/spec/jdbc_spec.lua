@@ -180,6 +180,69 @@ H.describe("the runner", function()
   end)
 end)
 
+H.describe("the JVM's timezone", function()
+  local function argv_for(tz)
+    local saved = vim.g.kebab_jdbc_timezone
+    vim.g.kebab_jdbc_timezone = tz
+    -- a SQLite url, so no driver has to be downloaded to build the argv
+    local argv, err = J.command("jdbc:sqlite:" .. H.tmpdir("tz") .. "/t.db", "ping")
+    vim.g.kebab_jdbc_timezone = saved
+    H.ok(argv, tostring(err))
+    return argv
+  end
+
+  H.it("is left to the JVM by default", function()
+    -- Not defaulted on purpose: guessing a canonical zone needs the alias
+    -- table, and getting it wrong moves every timestamp the server renders.
+    H.eq(nil, (function()
+      local saved = vim.g.kebab_jdbc_timezone
+      vim.g.kebab_jdbc_timezone = nil
+      local got = J.timezone()
+      vim.g.kebab_jdbc_timezone = saved
+      return got
+    end)())
+    for _, a in ipairs(argv_for(nil)) do
+      H.ok(not a:match("^%-Duser%.timezone"), "no zone should be forced: " .. a)
+    end
+  end)
+
+  H.it("is passed to the JVM when set", function()
+    local argv = argv_for("Europe/Istanbul")
+    H.eq("java", argv[1])
+    H.eq("-Duser.timezone=Europe/Istanbul", argv[2], "the flag must come before -cp")
+    H.eq("-cp", argv[3])
+    H.ok(vim.tbl_contains(argv, "KebabJdbc"), "the class should still be in there")
+  end)
+
+  H.it("ignores a blank setting", function()
+    for _, blank in ipairs({ "", "   " }) do
+      local saved = vim.g.kebab_jdbc_timezone
+      vim.g.kebab_jdbc_timezone = blank
+      local got = J.timezone()
+      vim.g.kebab_jdbc_timezone = saved
+      H.eq(nil, got, ("%q should not become a zone"):format(blank))
+    end
+  end)
+
+  H.it("explains a server that rejects the zone", function()
+    -- The driver repeats the server's complaint, and the server has no idea
+    -- which client sent it -- so the message names neither the JVM nor the
+    -- machine's timezone and reads as a database fault. This cost a real
+    -- debugging session: a legacy alias (`timedatectl set-timezone Turkey`)
+    -- is accepted by systemd and rejected by any server whose tzdata has no
+    -- backward-compatibility links.
+    local raw = 'org.postgresql.util.PSQLException: FATAL: invalid value for parameter "TimeZone": "Turkey"'
+    local hinted = J.hint(raw)
+    H.matches(vim.pesc(raw), hinted, "the original message must survive")
+    H.matches("kebab_jdbc_timezone", hinted)
+    H.matches("timedatectl set%-timezone", hinted)
+  end)
+
+  H.it("leaves an unrelated failure alone", function()
+    H.eq("connection refused", J.hint("connection refused"))
+  end)
+end)
+
 -- Everything below needs a JVM and, on a cold cache, the network. The cache
 -- directory is the real one on purpose: the 12MB driver is downloaded once and
 -- reused by later runs, which is also what a user experiences.

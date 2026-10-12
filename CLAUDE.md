@@ -524,6 +524,15 @@ client attached, file contents reverted.
   `~/src` and friends, which most machines lack. Only a root the user
   named in `vim.g.kebab_project_roots` or `$KEBAB_PROJECT_ROOTS` is reported
   missing; an unreadable directory is always reported.
+- **A legacy timezone alias breaks every JDBC connection.** systemd accepts
+  `timedatectl set-timezone Turkey`, the JVM reports that name verbatim in the
+  PostgreSQL startup packet, and a server whose tzdata lacks the
+  backward-compatibility links answers `FATAL: invalid value for parameter
+  "TimeZone"`. The message names neither the JVM nor the machine, so it reads
+  as a database fault. `vim.g.kebab_jdbc_timezone` passes a canonical name
+  (`-Duser.timezone`, which must come before `-cp`), and `jdbc.hint` appends
+  the fix to that error. Not defaulted: canonicalising an alias needs the
+  alias table, and a wrong guess moves every timestamp the server renders.
 - `handle:kill()` then `handle:close()` in the same tick drops the pid from
   libuv's queue before SIGCHLD, so the child is **never waitpid'd** and stays
   `<defunct>`. Close the handle in the exit callback, which is also the only
