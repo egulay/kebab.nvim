@@ -285,8 +285,8 @@ function M.pager_line(c, info)
   local K = require("kebab.keys")
   -- Spelled out, because this line is on screen and "]p" is not something
   -- anyone reads as two keystrokes until they are told.
-  return ("-- %s · rows %d-%d of %s · page %d · next: %s · back: %s · first: %s · re-run: %s")
-    :format(c.name, first, last, total, page,
+  return ("-- %s · rows %d-%d of %s · page %d · run: %s · next: %s · back: %s · first: %s · re-run: %s")
+    :format(c.name, first, last, total, page, K.human("<C-CR>"),
       K.human("]p"), K.human("[p"), K.human("[P"), K.human("R"))
 end
 
@@ -464,7 +464,18 @@ end
 ---pressed far too often to live three keys deep.
 ---@param buf integer
 function M.bind_pager(buf)
+  -- Run is bound on *both* panes: pressing it while looking at the rows is the
+  -- obvious thing to do, and when it was not bound there the key fell through
+  -- to the global one and opened a picker.
+  --
+  -- Not <leader>S, which is what this used to be: snacks already owns
+  -- `<leader>S` as "Select Scratch Buffer", so outside these two buffers the
+  -- key advertised for Run opened something else entirely -- reported as
+  -- "space s to run but it opens different menu". `<leader>Dr` is in the
+  -- database namespace and free; Ctrl+Enter is the one worth learning, since
+  -- it is what a graphical database IDE uses and it works in insert mode too.
   local keys = {
+    ["<leader>Dr"] = { function() M.run_current() end, "Run the statement" },
     ["]p"] = { function() M.turn_page(1) end, "Next page" },
     ["[p"] = { function() M.turn_page(-1) end, "Previous page" },
     ["[P"] = { function() M.first_page() end, "First page" },
@@ -473,20 +484,25 @@ function M.bind_pager(buf)
   for lhs, spec in pairs(keys) do
     vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })
   end
+  -- Ctrl+Enter in insert mode as well, so a query can be run without first
+  -- leaving the mode you typed it in. That is what the muscle memory expects.
+  for _, lhs in ipairs({ "<C-CR>", "<C-S-CR>" }) do
+    vim.keymap.set({ "n", "i" }, lhs, function()
+      if vim.fn.mode():sub(1, 1) == "i" then
+        vim.cmd("stopinsert")
+      end
+      M.run_current()
+    end, { buffer = buf, desc = "Run the statement" })
+  end
 end
 
 ---Buffer-local keys for the statement pane.
 ---@param buf integer
 function M.bind_editor(buf)
+  -- bind_pager already binds Run and the pager, buffer-locally, so they win
+  -- over the global <leader>S (dadbod's own exec, which opens a result window
+  -- of its own and would leave two).
   M.bind_pager(buf)
-  -- Buffer-local, so it wins over the global <leader>S (dadbod's own exec,
-  -- which opens a result window of its own and would leave two).
-  vim.keymap.set("n", "<leader>S", function()
-    M.run_current()
-  end, { buffer = buf, desc = "Run the statement under the cursor" })
-  vim.keymap.set("n", "<C-CR>", function()
-    M.run_current()
-  end, { buffer = buf, desc = "Run the statement under the cursor" })
 end
 
 -- --------------------------------------------------------------- the tree

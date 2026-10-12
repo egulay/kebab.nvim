@@ -25,6 +25,12 @@ local BUFFER_LOCAL = {
   -- The pager lives on the two SQL panes only. Mapping ]p, [p, [P or R
   -- globally would take four ordinary keys away from every buffer in the
   -- editor -- R especially -- so kebab.dbide binds them per buffer.
+  -- Run is Ctrl+Enter, the key a graphical database IDE uses, bound on the two
+  -- SQL panes in normal *and* insert mode. It was <leader>S, which snacks
+  -- already owns as "Select Scratch Buffer" -- so the key the menu advertised
+  -- for Run opened a picker anywhere else.
+  ["<C-CR>"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<leader>Dr"] = "kebab.dbide: bound on the statement and rows panes",
   ["]p"] = "kebab.dbide: bound on the statement and rows panes",
   ["[p"] = "kebab.dbide: bound on the statement and rows panes",
   ["[P"] = "kebab.dbide: bound on the statement and rows panes",

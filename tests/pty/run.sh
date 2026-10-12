@@ -139,7 +139,7 @@ rm -f "$work/report.txt"
 WORK="$work" REPORT_AFTER=26000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "a right click in the statement pane opens a menu" "SCREEN" "$work/report.txt"
 check "with Run Statement at the top of it"              "SCREEN.*Run Statement" "$work/report.txt"
-check "and its shortcut beside it"                       "Run Statement.*leader>S" "$work/report.txt"
+check "and its shortcut beside it"                       "Run Statement.*Ctrl+Enter" "$work/report.txt"
 check "the rows pager is in there"                       "SCREEN.*Rows" "$work/report.txt"
 
 # --- clicking a menu row actually runs it ----------------------------------
@@ -240,6 +240,57 @@ check "the file tree is not one of them"       -v                     "$work/rep
 check "the explorer window is pinned"          "ft=dbui fixbuf=true"  "$work/report.txt"
 check "the rows window is pinned"              "ft=dbout fixbuf=true" "$work/report.txt"
 check "the statement window is not pinned"     "ft=sql fixbuf=false"  "$work/report.txt"
+
+# --- no files open: the splash screen must not survive ---------------------
+#
+# Reported as "lazyvim splash always there", "shortcuts are not working at
+# all" and `Space S` opening something else -- all one fault. With no files
+# open, `:only` keeps the window holding the dashboard, the statement pane
+# refuses to reuse a special buffer, and so the splash sat in the layout
+# keeping its own keymaps. Anything typed while focused there went to the
+# dashboard. Four cases above this one failed on it too, and the suite's own
+# exit code was masked by piping it through `tail`.
+cat > "$work/splashchild.lua" <<'LUA'
+vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
+vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+require("kebab.cli").db("")
+vim.defer_fn(function()
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+end, 7000)
+vim.defer_fn(function()
+  local out = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    out[#out + 1] = ("WIN ft=%s buftype=%s"):format(vim.bo[b].filetype, vim.bo[b].buftype)
+  end
+  out[#out + 1] = "COUNT " .. #vim.api.nvim_list_wins()
+  -- and the keys that must work in both panes
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    if vim.b[b].kebab_db_editor or vim.b[b].kebab_db_output then
+      local lhs = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(b, "n")) do
+        lhs[#lhs + 1] = m.lhs
+      end
+      out[#out + 1] = ("KEYS %s %s"):format(
+        vim.b[b].kebab_db_editor and "statement" or "rows", table.concat(lhs, " "))
+    end
+  end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 28000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/splashchild.lua"],
+  "actions": [ {"kind":"wait","seconds":22} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 90 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" REPORT_AFTER=28000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "with no files open, there is no splash screen" -v "$work/report.txt" "dashboard\|alpha\|starter"
+check "and still exactly three windows"              "COUNT 3"                "$work/report.txt"
+check "Run is bound on the statement pane"           "KEYS statement.*C-CR"   "$work/report.txt"
+check "Run is bound on the rows pane too"            "KEYS rows.*C-CR"        "$work/report.txt"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

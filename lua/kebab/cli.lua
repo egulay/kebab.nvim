@@ -134,6 +134,27 @@ end
 -- explorer" was "start Neovim, then press a key", which is not how you start
 -- a dedicated database IDE.
 
+---Is this window's buffer one `kebab db` may take over?
+---
+---The dashboard is the case that mattered. With no files open, `:only` keeps
+---the window holding it, and the statement pane refuses to reuse a special
+---buffer -- so the splash screen survived into the database layout, and
+---anything typed while focused there hit the *dashboard's* keymaps. Reported
+---as three separate faults: "lazyvim splash always there", "shortcuts are not
+---working at all", and `Space S` opening something else.
+---@param win integer
+---@return boolean
+local function disposable(win)
+  local buf = vim.api.nvim_win_get_buf(win)
+  if vim.bo[buf].modified then
+    return false -- never discard work
+  end
+  if vim.bo[buf].buftype ~= "" then
+    return true -- a dashboard, a starter screen, any scratch
+  end
+  return vim.api.nvim_buf_get_name(buf) == ""
+end
+
 ---Shut the file tree, and stop the always-on explorer from reopening it.
 ---
 ---`kebab db` is a database session: the left column belongs to the data source
@@ -199,6 +220,13 @@ function M.db(name)
   local function establish(after)
     M.close_file_explorer()
     pcall(vim.cmd, "only")
+    -- An empty buffer rather than the splash screen: a window holding a
+    -- dashboard is not one the statement pane can take over, so it would
+    -- otherwise sit in the layout keeping its own keymaps.
+    local win = vim.api.nvim_get_current_win()
+    if disposable(win) then
+      pcall(vim.cmd, "enew")
+    end
     after()
     -- and again, for anything that was already queued when we started
     vim.schedule(function()

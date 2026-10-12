@@ -318,14 +318,14 @@ Drivers come from Maven Central on first use; no native client needed.
 |---|---|---|
 | Open the database IDE | `kebab db` | from a shell: explorer open, connections on the left |
 | Open a table | **double click it** | the select top right, its rows under it |
-| Run what you edited | `Space S` or `Ctrl+Enter` | in the statement pane; rows refresh below |
+| Run what you edited | `Ctrl+Enter` | in either pane, and in insert mode too; rows refresh below |
 | ...on one connection | `k e b a b   d b   name` | straight into a SQL console |
 | Database tool window | `Space D D` | Explorer |
 | New data source | `Space D a` | Add a connection, then test it |
 | Open a table | `Space D t` | Browse tables, open one |
 | New console | `Space D q` | SQL console bound to a connection |
 | Attach console to source | `Space D c` | Attach to this buffer |
-| Execute | `Space S` | Run the statement under the cursor |
+| Execute | `Ctrl+Enter` or `Space D r` | Run the statement under the cursor |
 | | `Space D p` | Test the connection |
 | | `Space D e` | Edit the connections file |
 | | `:IdeDbStatus` | Connections, and warm processes |

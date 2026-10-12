@@ -34,7 +34,7 @@ local connection = {
 
 -- Run first, and at the top level: it is the reason the menu was opened.
 local items = {
-  { name = "Run Statement", cmd = A.ex("IdeDbRun"), rtxt = "<leader>S" },
+  { name = "Run Statement", cmd = A.ex("IdeDbRun"), rtxt = "<C-CR>" },
   { name = "Run Whole Buffer", cmd = A.ex("IdeDbRunAll"), rtxt = ":IdeDbRunAll" },
   { name = "separator" },
   { name = "Rows", items = rows },

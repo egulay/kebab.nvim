@@ -592,6 +592,24 @@ client attached, file contents reverted.
   pager): those go in `menu_shortcuts_spec`'s `BUFFER_LOCAL` with a reason, and
   the sweep then asserts they are *not* mapped globally. Mapping `R` globally
   to a database action would take an ordinary key from every buffer.
+- **`<leader>S` is already taken** -- snacks owns it as "Select Scratch
+  Buffer". A buffer-local mapping wins inside its own buffer, so Run worked in
+  the SQL panes and opened a *picker* everywhere else, which is what the
+  cheatsheet and the menu were advertising. Run is `<C-CR>` (what a graphical
+  database IDE uses, and bound in insert mode too) plus `<leader>Dr` in the
+  database namespace. Before binding a leader key, check it:
+  `nvim --headless -c 'lua for _,m in ipairs(vim.api.nvim_get_keymap("n")) do if m.lhs == " S" then print(m.desc) end end' -c qa`.
+- **`:only` keeps the dashboard.** With no file arguments the surviving window
+  holds the splash screen, which is a `nofile` buffer -- so the statement pane
+  refused to reuse it and it sat in the database layout **keeping its own
+  keymaps**, which is why "shortcuts are not working at all" and `Space S`
+  opened something else. `cli.db` replaces a *disposable* window's buffer
+  (special buftype, or unnamed and unmodified -- never a modified one) with an
+  empty one. A pty case runs `kebab db` with no files open and asserts no
+  dashboard survives.
+- **A pipeline hides the exit code**: `./tests/pty/run.sh | tail` reports
+  *tail's* status, so a run with four failures looked like a pass and was
+  reported as one. Redirect to a file and read it, or check `${PIPESTATUS[0]}`.
 - **A headless Neovim has no screen grid, so it cannot be clicked.**
   `nvim_input_mouse()` is dropped and `feedkeys("<2-LeftMouse>")` does nothing,
   both silently -- so a mouse test written headlessly passes by doing nothing.

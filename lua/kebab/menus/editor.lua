@@ -229,7 +229,7 @@ local database = {
   { name = "Browse Tables...", cmd = A.ex("IdeDbTables"), rtxt = "<leader>Dt" },
   { name = "New SQL Console", cmd = A.ex("IdeDbConsole"), rtxt = "<leader>Dq" },
   { name = "separator" },
-  { name = "Run Statement", cmd = A.ex("IdeDbRun"), rtxt = "<leader>S" },
+  { name = "Run Statement", cmd = A.ex("IdeDbRun"), rtxt = "<C-CR>" },
   { name = "Run Whole Buffer", cmd = A.ex("IdeDbRunAll"), rtxt = ":IdeDbRunAll" },
   { name = "separator" },
   { name = "Next Page of Rows", cmd = A.ex("IdeDbNextPage"), rtxt = "]p" },
