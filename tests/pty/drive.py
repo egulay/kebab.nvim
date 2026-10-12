@@ -44,10 +44,11 @@ def sgr(button, col, row, press=True):
     """SGR mouse report: 1-based col/row, button 0 = left."""
     return "\033[<%d;%d;%d%s" % (button, col, row, "M" if press else "m")
 
-def click(col, row, count=1, gap=0.08):
+def click(col, row, count=1, gap=0.08, button=0):
+    """button 0 = left, 1 = middle, 2 = right."""
     seq = []
     for _ in range(count):
-        seq += [sgr(0, col, row, True), sgr(0, col, row, False), gap]
+        seq += [sgr(button, col, row, True), sgr(button, col, row, False), gap]
     return seq
 
 if __name__ == "__main__":
@@ -57,7 +58,7 @@ if __name__ == "__main__":
         if a["kind"] == "wait":
             acts.append(a["seconds"])
         elif a["kind"] == "click":
-            acts += click(a["col"], a["row"], a.get("count", 1))
+            acts += click(a["col"], a["row"], a.get("count", 1), button=a.get("button", 0))
         elif a["kind"] == "keys":
             acts.append(a["text"])
     raw = run(spec["nvim_args"], acts, spec["report"], idle=spec.get("idle", 8), limit=spec.get("limit", 120))
