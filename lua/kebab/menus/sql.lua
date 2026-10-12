@@ -12,11 +12,11 @@ local A = require("kebab.menus.action")
 local editor = require("kebab.menus.editor")
 
 local rows = {
-  { name = "Next Page", cmd = A.ex("IdeDbNextPage"), rtxt = "]p" },
-  { name = "Previous Page", cmd = A.ex("IdeDbPrevPage"), rtxt = "[p" },
-  { name = "First Page", cmd = A.ex("IdeDbFirstPage"), rtxt = "[P" },
+  { name = "Next Page", cmd = A.ex("IdeDbNextPage"), rtxt = "<S-A-Right>" },
+  { name = "Previous Page", cmd = A.ex("IdeDbPrevPage"), rtxt = "<S-A-Left>" },
+  { name = "First Page", cmd = A.ex("IdeDbFirstPage"), rtxt = "<S-A-Home>" },
   { name = "separator" },
-  { name = "Re-run This Page", cmd = A.ex("IdeDbRefreshPage"), rtxt = "R" },
+  { name = "Re-run This Page", cmd = A.ex("IdeDbRefreshPage"), rtxt = "<S-A-R>" },
 }
 
 local connection = {

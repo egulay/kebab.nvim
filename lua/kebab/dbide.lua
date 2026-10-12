@@ -299,8 +299,8 @@ end
 function M.pager_line(c, info)
   local K = require("kebab.keys")
   local how = ("-- run %s · next %s · back %s · first %s · re-run %s"):format(
-    K.human("<C-CR>"), K.human("<A-Right>"), K.human("<A-Left>"),
-    K.human("<A-Home>"), K.human("<A-r>"))
+    K.human("<C-CR>"), K.human("<S-A-Right>"), K.human("<S-A-Left>"),
+    K.human("<S-A-Home>"), K.human("<S-A-R>"))
   if not info then
     return ("-- %s"):format(c.name), how
   end
@@ -573,9 +573,14 @@ function M.bind_pager(buf)
   -- the pane where you *edit* SQL means pressing R to replace a word re-ran
   -- the query instead.
   --
-  -- Alt with the arrows and Home reads as paging, is free in Vim and in
-  -- LazyVim, and shadows nothing. Ctrl+Enter is Run, which is what a
-  -- graphical database IDE uses and works in insert mode too.
+  -- Shift+Alt with the arrows and Home. Plain Alt+Left/Right was the third
+  -- choice and still wrong: nothing in Neovim or in the window manager claims
+  -- it, but a terminal commonly sends it as the readline word-jump, so it
+  -- never reaches the editor. Shift+Alt is left alone by all of them, and
+  -- plain Alt is deliberately vacated.
+  --
+  -- Ctrl+Enter is Run, which is what a graphical database IDE uses and works
+  -- in insert mode too.
   local keys = {
     ["<leader>Dr"] = { function() M.run_current() end, "Run the statement" },
     -- dadbod-ui binds <leader>S in a sql buffer once it is loaded, which is
@@ -584,10 +589,12 @@ function M.bind_pager(buf)
     -- filetype is, so ours wins; it is not *advertised* anywhere, because
     -- outside these two panes the same key is snacks' scratch-buffer picker.
     ["<leader>S"] = { function() M.run_current() end, "Run the statement" },
-    ["<A-Right>"] = { function() M.turn_page(1) end, "Next page of rows" },
-    ["<A-Left>"] = { function() M.turn_page(-1) end, "Previous page of rows" },
-    ["<A-Home>"] = { function() M.first_page() end, "First page of rows" },
-    ["<A-r>"] = { function() M.refresh() end, "Re-run this page" },
+    ["<S-A-Right>"] = { function() M.turn_page(1) end, "Next page of rows" },
+    ["<S-A-Left>"] = { function() M.turn_page(-1) end, "Previous page of rows" },
+    ["<S-A-Home>"] = { function() M.first_page() end, "First page of rows" },
+    -- Shift+r is R, so this is stored as <M-R>; declaring it with the capital
+    -- keeps the label on screen the same as the key you press.
+    ["<S-A-R>"] = { function() M.refresh() end, "Re-run this page" },
   }
   for lhs, spec in pairs(keys) do
     vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })

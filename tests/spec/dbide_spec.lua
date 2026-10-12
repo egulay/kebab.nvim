@@ -349,9 +349,9 @@ H.describe("paging the rows", function()
     -- the first version shadowed all three in the pane where you edit SQL.
     local where, how = I.pager_line(c, { offset = 0, shown = 1, more = false })
     H.matches("rows 1%-1 of 1", where)
-    H.matches("next Alt%+Right", how, "the keys belong on screen, as keys: " .. how)
-    H.matches("back Alt%+Left", how)
-    H.matches("re%-run Alt%+r", how)
+    H.matches("next Shift%+Alt%+Right", how, "the keys belong on screen, as keys: " .. how)
+    H.matches("back Shift%+Alt%+Left", how)
+    H.matches("re%-run Shift%+Alt%+R", how)
     H.matches("run Ctrl%+Enter", how)
     for _, line in ipairs({ where, how }) do
       H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
@@ -503,8 +503,9 @@ H.describe("paging the rows", function()
       for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
         keys[m.lhs] = true
       end
-      -- Neovim stores <A-x> as <M-x>, so that is what a keymap lookup sees.
-      for _, lhs in ipairs({ "<M-Right>", "<M-Left>", "<M-Home>", "<M-r>", "<C-CR>" }) do
+      -- Neovim stores <S-A-x> as <M-S-x>, and folds Shift+r into <M-R>, so
+      -- that is what a keymap lookup sees.
+      for _, lhs in ipairs({ "<M-S-Right>", "<M-S-Left>", "<M-S-Home>", "<M-R>", "<C-CR>" }) do
         H.ok(keys[lhs], ("%s should be mapped in buffer %d"):format(lhs, buf))
       end
     end

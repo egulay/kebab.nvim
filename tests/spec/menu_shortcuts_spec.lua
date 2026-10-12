@@ -21,6 +21,12 @@ local BUILTIN = {
 -- Keys that only exist in certain buffers. Each needs a reason, and the reason
 -- has to be the truth: these are checked for *absence* globally, so one that
 -- becomes global will fail here and have to be moved out of this table.
+-- Keys written the way **Neovim's own API** returns them, because that is what
+-- they are compared against: nvim_get_keymap answers `<M-S-Right>`, and
+-- "Shift+Alt+Right" cannot be matched against a mapping. Nothing in this table
+-- is ever shown to anyone -- what goes on screen is rendered by
+-- kebab.keys.human ("Shift+Alt+Right"), and the assertion "shows what a person
+-- presses, not <leader>" below fails if any of this form reaches a menu.
 local BUFFER_LOCAL = {
   -- The pager lives on the two SQL panes only. Mapping ]p, [p, [P or R
   -- globally would take four ordinary keys away from every buffer in the
@@ -31,10 +37,12 @@ local BUFFER_LOCAL = {
   -- for Run opened a picker anywhere else.
   ["<C-CR>"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>Dr"] = "kebab.dbide: bound on the statement and rows panes",
-  ["]p"] = "kebab.dbide: bound on the statement and rows panes",
-  ["[p"] = "kebab.dbide: bound on the statement and rows panes",
-  ["[P"] = "kebab.dbide: bound on the statement and rows panes",
-  ["R"] = "kebab.dbide: bound on the statement and rows panes",
+  -- Shift+Alt, because plain Alt+Left/Right is commonly eaten by the terminal
+  -- as a readline word-jump, and `]p`, `[p` and `R` are built-in Vim commands.
+  ["<S-A-Right>"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<S-A-Left>"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<S-A-Home>"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<S-A-R>"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>ca"] = "LSP: bound on LspAttach",
   ["<leader>cr"] = "LSP: bound on LspAttach",
   ["gd"] = "LSP: bound on LspAttach",
