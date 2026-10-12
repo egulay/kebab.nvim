@@ -25,6 +25,14 @@ def run(nvim_args, actions, report, idle=1.0, limit=120):
     for act in actions:
         if isinstance(act, (int, float)):
             pump(act)
+        elif isinstance(act, tuple) and act[0] == "target":
+            spec = act[1]
+            row, col = read_target(spec["file"], spec["name"], spec.get("timeout", 40))
+            for part in click(col, row, spec.get("count", 1), button=spec.get("button", 0)):
+                if isinstance(part, (int, float)):
+                    pump(part)
+                else:
+                    os.write(fd, part.encode())
         else:
             os.write(fd, act if isinstance(act, bytes) else act.encode())
     while time.time() - start < limit:
@@ -51,6 +59,27 @@ def click(col, row, count=1, gap=0.08, button=0):
         seq += [sgr(button, col, row, True), sgr(button, col, row, False), gap]
     return seq
 
+def read_target(path, name, timeout=40.0):
+    """Wait for the editor to say where `name` is on screen, as "name row col".
+
+    The editor rewrites this file as the layout changes, so a click is aimed at
+    where the thing is *now*. Hardcoding screen rows made one fixture change
+    break five unrelated cases.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(path) as fh:
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) == 3 and parts[0] == name:
+                        return int(parts[1]), int(parts[2])
+        except OSError:
+            pass
+        time.sleep(0.2)
+    raise SystemExit("the editor never reported a target called %r" % name)
+
+
 if __name__ == "__main__":
     spec = json.load(open(sys.argv[1]))
     acts = []
@@ -59,6 +88,9 @@ if __name__ == "__main__":
             acts.append(a["seconds"])
         elif a["kind"] == "click":
             acts += click(a["col"], a["row"], a.get("count", 1), button=a.get("button", 0))
+        elif a["kind"] == "click_target":
+            # resolved while the editor is running, not now
+            acts.append(("target", a))
         elif a["kind"] == "keys":
             acts.append(a["text"])
     raw = run(spec["nvim_args"], acts, spec["report"], idle=spec.get("idle", 8), limit=spec.get("limit", 120))

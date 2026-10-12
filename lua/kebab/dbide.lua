@@ -306,22 +306,45 @@ function M.buttons()
 end
 
 ---The pager lines shown above the rows: where you are, then the buttons.
+---
+---Built to fit the pane it is shown in, because a terminal is whatever size
+---the person made it. At 200 columns everything is there; at 80 the hint after
+---the buttons goes; narrower still, the labels go and the keys remain. The
+---buttons never go -- they are the control.
 ---@param c kebab.DbConnection
 ---@param info table|nil
+---@param width? number columns available; the rows window's width by default
 ---@return string where, string bar, table spans column ranges, 1-based inclusive
-function M.pager_line(c, info)
-  local parts, spans = {}, {}
-  local text = "-- "
-  for _, b in ipairs(M.buttons()) do
-    local label = ("[ %s %s ]"):format(b.key, b.label)
-    spans[#spans + 1] = { from = #text + 1, to = #text + #label, key = b.key }
-    parts[#parts + 1] = label
-    text = text .. label .. "  "
-  end
-  local bar = "-- " .. table.concat(parts, "  ")
+function M.pager_line(c, info, width)
+  width = width or (function()
+    local win = window_with(OUTPUT_VAR)
+    return win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) or 80
+  end)()
 
-  local run = ("   run: %s"):format(require("kebab.keys").human("<C-CR>"))
-  bar = bar .. run
+  local buttons = M.buttons()
+  -- widest first, narrowest last; the first that fits wins
+  local layouts = {
+    { labels = true, hint = true, gap = "  " },
+    { labels = true, hint = false, gap = "  " },
+    { labels = false, hint = false, gap = "  " },
+    { labels = false, hint = false, gap = "" },
+  }
+  local bar, spans
+  for _, layout in ipairs(layouts) do
+    local text, got = "-- ", {}
+    for i, b in ipairs(buttons) do
+      local label = layout.labels and ("[ %s %s ]"):format(b.key, b.label) or ("[ %s ]"):format(b.key)
+      got[#got + 1] = { from = #text + 1, to = #text + #label, key = b.key }
+      text = text .. label .. (i < #buttons and layout.gap or "")
+    end
+    if layout.hint then
+      text = text .. ("   run: %s"):format(require("kebab.keys").human("<C-CR>"))
+    end
+    bar, spans = text, got
+    if #text <= width then
+      break
+    end
+  end
 
   if not info then
     return ("-- %s"):format(c.name), bar, spans
@@ -338,6 +361,10 @@ function M.pager_line(c, info)
   local source = ({ cursor = "held", server = "re-queried", client = "skipped" })[info.kind or ""]
   local where = ("-- %s · rows %d-%d of %s · page %d%s"):format(
     c.name, first, last, total, page, source and (" · " .. source) or "")
+  if #where > width then
+    -- the name and the provenance are the first things worth losing
+    where = ("-- rows %d-%d of %s · page %d"):format(first, last, total, page)
+  end
   return where, bar, spans
 end
 

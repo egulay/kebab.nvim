@@ -2,7 +2,12 @@
 # Mouse behaviour, in a real terminal. See README.md -- this is not part of
 # ./tests/run.sh because each case boots an editor and talks to a database.
 set -uo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
+# $0 may be a copy somewhere else: a run that edits these files while they are
+# executing re-reads a script from a byte offset and dies mid-line ("syntax
+# error near unexpected token"), which cost a run and looked like a product
+# failure. KEBAB_PTY_DIR lets a copy of this script keep using the real
+# directory for drive.py and targets.lua.
+here=${KEBAB_PTY_DIR:-$(cd "$(dirname "$0")" && pwd)}
 root=$(cd "$here/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -13,13 +18,17 @@ pass=0
 # The database the cases need. A throwaway SQLite file, so nothing here
 # depends on a server being up or on anyone's credentials.
 db="$work/shop.sqlite"
+# One table, three rows. Both halves matter:
+#
+#   one table   -- these cases click at absolute rows in the tree, so adding a
+#                  second table shifted every node below it and broke five
+#                  cases that had nothing to do with the change.
+#   three rows  -- with one row there is no next page, so Next correctly
+#                  refuses to move and the click case fails looking like a
+#                  broken button.
 sqlite3 "$db" "CREATE TABLE customers (id INTEGER PRIMARY KEY, full_name TEXT);
-               INSERT INTO customers (full_name) VALUES ('Ada Lovelace');
-               -- a second table with several rows, for the pager: with one row
-               -- there is no next page and Next correctly refuses to move,
-               -- which failed the click case and looked like a broken button
-               CREATE TABLE pages (id INTEGER PRIMARY KEY, label TEXT);
-               INSERT INTO pages (label) VALUES ('alpha'),('beta'),('gamma');" || exit 1
+               INSERT INTO customers (full_name)
+                 VALUES ('Ada Lovelace'),('Alan Turing'),('Grace Hopper');" || exit 1
 
 export KEBAB_DB_STORE="$work/connections.json"
 cat > "$KEBAB_DB_STORE" <<JSON
@@ -29,6 +38,9 @@ JSON
 cat > "$work/child.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
 vim.defer_fn(function()
   local out = {}
@@ -70,7 +82,8 @@ check() { # name pattern file           -- or: name -v file pattern (must NOT ma
 
 run_case() { # json
   rm -f "$work/report.txt"
-  WORK="$work" REPORT_AFTER="$1" python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+  WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER="$1" \
+    python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 }
 
 printf 'mouse tests (a real terminal, real mouse reports)\n\n'
@@ -78,7 +91,7 @@ printf 'mouse tests (a real terminal, real mouse reports)\n\n'
 # --- a double click on a connection expands it -----------------------------
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/child.lua"],
-  "actions": [ {"kind":"wait","seconds":10}, {"kind":"click","col":6,"row":3,"count":2},
+  "actions": [ {"kind":"wait","seconds":10}, {"kind":"click_target","name":"connection","file":"$work/targets","count":2},
                {"kind":"wait","seconds":8} ],
   "report": "$work/report.txt", "idle": 2, "limit": 90 }
 JSON
@@ -88,15 +101,15 @@ check "a double click expands a connection" "Tables (1)" "$work/report.txt"
 # --- a double click on a table opens it in the three panes -----------------
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/child.lua"],
-  "actions": [ {"kind":"wait","seconds":10}, {"kind":"click","col":6,"row":3,"count":2},
-               {"kind":"wait","seconds":6},  {"kind":"click","col":8,"row":6,"count":2},
-               {"kind":"wait","seconds":6},  {"kind":"click","col":12,"row":7,"count":2},
+  "actions": [ {"kind":"wait","seconds":10}, {"kind":"click_target","name":"connection","file":"$work/targets","count":2},
+               {"kind":"wait","seconds":6},  {"kind":"click_target","name":"tables","file":"$work/targets","count":2},
+               {"kind":"wait","seconds":6},  {"kind":"click_target","name":"table","file":"$work/targets","count":2},
                {"kind":"wait","seconds":10} ],
   "report": "$work/report.txt", "idle": 2, "limit": 120 }
 JSON
 run_case 42000
 check "a double click on a table writes the select" "STATEMENT.*select .* from" "$work/report.txt"
-check "the pager says where you are"                 "ROWS.*rows 1-1 of 1"     "$work/report.txt"
+check "the pager says where you are"                 "ROWS.*rows 1-3 of 3"     "$work/report.txt"
 check "and shows its rows"                          "ROWS.*Ada Lovelace"       "$work/report.txt"
 check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    "$work/report.txt"
 
@@ -109,6 +122,9 @@ check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    
 cat > "$work/menuchild.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
 vim.defer_fn(function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
@@ -136,12 +152,12 @@ LUA
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/menuchild.lua"],
   "actions": [ {"kind":"wait","seconds":16},
-               {"kind":"click","col":60,"row":3,"button":2,"count":1},
+               {"kind":"click_target","name":"statement","file":"$work/targets","button":2},
                {"kind":"wait","seconds":8} ],
   "report": "$work/report.txt", "idle": 2, "limit": 90 }
 JSON
 rm -f "$work/report.txt"
-WORK="$work" REPORT_AFTER=26000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=26000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "a right click in the statement pane opens a menu" "SCREEN" "$work/report.txt"
 check "with Run Statement at the top of it"              "SCREEN.*Run Statement" "$work/report.txt"
 check "and its shortcut beside it"                       "Run Statement.*Ctrl+Enter" "$work/report.txt"
@@ -158,6 +174,9 @@ check "the rows pager is in there"                       "SCREEN.*Rows" "$work/r
 cat > "$work/clickchild.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
 vim.defer_fn(function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
@@ -186,14 +205,14 @@ LUA
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/clickchild.lua"],
   "actions": [ {"kind":"wait","seconds":17},
-               {"kind":"click","col":60,"row":3,"button":2,"count":1},
+               {"kind":"click_target","name":"statement","file":"$work/targets","button":2},
                {"kind":"wait","seconds":4},
-               {"kind":"click","col":50,"row":5,"button":0,"count":1},
+               {"kind":"click_target","name":"menu_run","file":"$work/targets"},
                {"kind":"wait","seconds":10} ],
   "report": "$work/report.txt", "idle": 2, "limit": 110 }
 JSON
 rm -f "$work/report.txt"
-WORK="$work" REPORT_AFTER=34000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=34000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "clicking a menu row runs that entry" "clicked-the-menu" "$work/report.txt"
 
 # --- the layout survives a session that already had windows ----------------
@@ -210,6 +229,9 @@ printf 'package main\nfunc other() {}\n' > "$work/b.go"
 cat > "$work/tabchild.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 vim.cmd("edit " .. vim.env.WORK .. "/a.go")
 vim.cmd("edit " .. vim.env.WORK .. "/b.go")
 require("kebab.cli").db("")
@@ -232,14 +254,14 @@ LUA
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/tabchild.lua"],
   "actions": [ {"kind":"wait","seconds":17},
-               {"kind":"click","col":8,"row":7,"count":2},
+               {"kind":"click_target","name":"tables","file":"$work/targets","count":2},
                {"kind":"wait","seconds":4},
                {"kind":"click","col":12,"row":1,"button":0,"count":1},
                {"kind":"wait","seconds":7} ],
   "report": "$work/report.txt", "idle": 2, "limit": 110 }
 JSON
 rm -f "$work/report.txt"
-WORK="$work" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "db mode leaves exactly three windows"   "COUNT 3"              "$work/report.txt"
 check "the file tree is not one of them"       -v                     "$work/report.txt" "neo-tree"
 check "the explorer window is pinned"          "ft=dbui fixbuf=true"  "$work/report.txt"
@@ -258,6 +280,9 @@ check "the statement window is not pinned"     "ft=sql fixbuf=false"  "$work/rep
 cat > "$work/splashchild.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
 vim.defer_fn(function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
@@ -291,7 +316,7 @@ cat > "$work/case.json" <<JSON
   "report": "$work/report.txt", "idle": 2, "limit": 90 }
 JSON
 rm -f "$work/report.txt"
-WORK="$work" REPORT_AFTER=28000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=28000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "with no files open, there is no splash screen" -v "$work/report.txt" "dashboard\|alpha\|starter"
 check "and still exactly three windows"              "COUNT 3"                "$work/report.txt"
 check "Run is bound on the statement pane"           "KEYS statement.*C-CR"   "$work/report.txt"
@@ -306,10 +331,13 @@ check "Run is bound on the rows pane too"            "KEYS rows.*C-CR"        "$
 cat > "$work/barchild.lua" <<'LUA'
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+-- tell the driver where things are, so clicks are aimed and not guessed
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
 vim.g.kebab_db_page_size = 1
 require("kebab.cli").db("")
 vim.defer_fn(function()
-  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "pages")
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
 end, 7000)
 vim.defer_fn(function()
   local out = {}
@@ -330,12 +358,12 @@ LUA
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/barchild.lua"],
   "actions": [ {"kind":"wait","seconds":17},
-               {"kind":"click","col":45,"row":12,"button":0,"count":1},
+               {"kind":"click_target","name":"button_n","file":"$work/targets"},
                {"kind":"wait","seconds":8} ],
   "report": "$work/report.txt", "idle": 2, "limit": 100 }
 JSON
 rm -f "$work/report.txt"
-WORK="$work" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "the rows pane shows a button bar"      "LINE2 -- \[ n next \]"  "$work/report.txt"
 check "clicking [ n next ] turns the page"    "LINE1.*page 2"           "$work/report.txt"
 
