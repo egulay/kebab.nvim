@@ -78,6 +78,16 @@ function M.collect()
     end
   end
 
+  -- a node in the file tree, for the right-click menu there
+  local filetree = window(function(b)
+    return vim.bo[b].filetype == "neo-tree"
+  end)
+  if filetree then
+    local line = line_matching(filetree, "%a") or 1
+    local row, col = screen_at(filetree, math.max(line, 2), 4)
+    out.tree_node = { row = row, col = col }
+  end
+
   local editor = editor_win()
   if editor then
     local row, col = screen_at(editor, 1, 4)

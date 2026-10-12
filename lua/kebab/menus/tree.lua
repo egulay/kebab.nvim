@@ -298,7 +298,8 @@ local menu = {
 
 -- nvzone/menu wants the plain list, so the helpers ride along as fields on it
 -- rather than changing the shape the menu consumes.
-menu.source_commands = source_commands
+-- Also behind the metatable: anything on the list table that is not an entry
+-- is something nvzone/menu will try to index as one.
 
 -- The actions the tree's own key mappings need. plugins/ui.lua binds the keys
 -- this menu advertises to these, so "Revert / Discard Changes · gr" is true
@@ -306,11 +307,25 @@ menu.source_commands = source_commands
 -- `git checkout HEAD --` that ignores untracked files, i.e. exactly the bug
 -- the menu entry exists to fix.
 -- A.tag returns the function itself, so these are directly callable.
-menu.actions = {
+-- The actions hang off a metatable, not off the list.
+--
+-- `menu.actions = {...}` put a table of *functions* on the same table
+-- nvzone/menu iterates, and its mappings.lua indexes every value it finds:
+-- "attempt to index local 'v' (a function value)". So the tree's right-click
+-- menu never opened -- reported as "i can not see any new file or new package
+-- on the right click", and it was not a missing entry, it was no menu at all.
+-- The sweeps never caught it because they walk the list with ipairs and never
+-- *open* the menu; menu_open_spec does that now.
+--
+-- A metatable keeps `menu.actions` working for the callers that use it while
+-- leaving `pairs(menu)` to yield only the entries.
+local actions = {
   revert = revert_node,
   copy_absolute_path = copy_path(":p"),
   copy_relative_path = copy_path(":~:."),
 }
+
+setmetatable(menu, { __index = { actions = actions, source_commands = source_commands } })
 
 -- As with the editor menu: declared canonically, shown as what you press.
 require("kebab.keys").humanise(menu)
