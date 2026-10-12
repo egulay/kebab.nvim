@@ -88,6 +88,30 @@ H.describe("the separator", function()
   end)
 end)
 
+H.describe("the README", function()
+  -- Same rule as the cheatsheet: a shortcut shown to a reader is written as
+  -- the keys they press. Lua snippets are exempt -- a `vim.keymap.set` example
+  -- has to be copy-pastable, and "Space -> D -> D" is not a key specification.
+  local path = _G.KEBAB_TEST.root .. "/README.md"
+
+  H.it("shows no key specification jargon outside code blocks", function()
+    local bad = {}
+    local fence = false
+    for n, line in ipairs(vim.fn.readfile(path)) do
+      if line:sub(1, 3) == "```" then
+        fence = not fence
+      elseif not fence then
+        for token in line:gmatch("`([^`]+)`") do
+          if token:lower():find("leader") then
+            bad[#bad + 1] = ("%d: %s"):format(n, token)
+          end
+        end
+      end
+    end
+    H.eq({}, bad, "write what the user presses, e.g. `Space → D → D`")
+  end)
+end)
+
 H.describe("the cheatsheet", function()
   local path = _G.KEBAB_TEST.root .. "/CHEATSHEET.md"
 

@@ -39,7 +39,7 @@ charge, this adds the IDE on top.
   the language in hand, plus `.editorconfig`.
 - **Per-project run configurations** in `.kebab/run.json`, with args and env,
   committed so your team gets them too.
-- **Follow external edits** (`<leader>uf`): when something outside the editor
+- **Follow external edits** (`Space → u → f`): when something outside the editor
   changes a file — an AI agent working in the project, say — the view moves to
   the line that changed. On by default, yields to your own typing, and never
   reloads over unsaved changes.
@@ -180,8 +180,8 @@ with `vim.g.kebab_project_roots`, or with `KEBAB_PROJECT_ROOTS` (colon
 separated) for a single invocation, which wins. `KEBAB_DRY_RUN=1` prints the Lua a command would
 run instead of running it.
 
-Each root is scanned two levels deep, so `~/Projects/work/<project>` is found
-as well as `~/Projects/<project>`; a directory that is itself a project is not
+Each root is scanned two levels deep, so `~ → / → P → r → o → j → e → c → t → s → / → w → o → r → k → / → project` is found
+as well as `~ → / → P → r → o → j → e → c → t → s → / → project`; a directory that is itself a project is not
 descended into, and `node_modules` and friends are never walked.
 `vim.g.kebab_project_depth` (default 2) and `vim.g.kebab_project_scan_limit`
 (default 2000 directories) bound it. A root that exists but cannot be read is
@@ -197,7 +197,7 @@ time you use it.
 
 `kebab db` opens the three panes a database IDE opens with, and a **double
 click** on a table in the tree writes its select into the statement pane and
-its rows underneath — then `<leader>S` runs whatever you edit it into, and the
+its rows underneath — then `Space → S` runs whatever you edit it into, and the
 rows pane refreshes:
 
 ```
@@ -268,12 +268,12 @@ and ordering are SQL you type.
 
 | | |
 |---|---|
-| `<leader>DD` | Database explorer |
-| `<leader>Da` | Add a connection (asks, then tests it) |
-| `<leader>Dt` | Browse tables, open one to see its rows |
-| `<leader>Dq` | New SQL console bound to a connection |
-| `<leader>Dc` | Attach a connection to this buffer |
-| `<leader>S` | Run the statement under the cursor |
+| `Space → D → D` | Database explorer |
+| `Space → D → a` | Add a connection (asks, then tests it) |
+| `Space → D → t` | Browse tables, open one to see its rows |
+| `Space → D → q` | New SQL console bound to a connection |
+| `Space → D → c` | Attach a connection to this buffer |
+| `Space → S` | Run the statement under the cursor |
 
 Queries run against a process that is kept warm per connection, so the first
 costs about 180ms and every one after it about 0.2ms. `:IdeDbStatus` reports
@@ -303,7 +303,7 @@ environment variable to read it from:
 
 Pointing `password_env` at a name an existing project already exports — a
 `.env` file it ships with — means sourcing that file is all the setup there is.
-`kebab db --env <file>` does the sourcing itself, and `$KEBAB_DB_ENV` names a
+`k → e → b → a → b →   → d → b →   → - → - → e → n → v →   → file` does the sourcing itself, and `$KEBAB_DB_ENV` names a
 file to use when `--env` is not given, so `kebab db` alone is enough. The
 sourcing happens in the shell, before Neovim starts: a connection reads its
 variable from the editor's own environment, which nothing can add to afterwards.
@@ -314,7 +314,7 @@ Timezone` answering `Turkey`, `Japan`, `Poland`, anything without a `/`). The
 JVM repeats that name verbatim and a server whose tzdata has no
 backward-compatibility links refuses it. Set
 `vim.g.kebab_jdbc_timezone = "Europe/Berlin"` — or fix it for every program
-on the machine with `timedatectl set-timezone <Area/Location>`.
+on the machine with `t → i → m → e → d → a → t → e → c → t → l →   → s → e → t → - → t → i → m → e → z → o → n → e →   → Area/Location`.
 
 Completion knows tables, `customers.` → that table's columns with their types,
 and aliases (`select c. from customers c`). It is a separate blink source from
@@ -425,6 +425,32 @@ plugins it checks are the ones that actually ship. It asserts on effects — fil
 created, a window opened, a file reverted — rather than on modules loading, and
 it never touches a file outside its own scratch directory.
 
+Three things it cannot cover, each with its own runner:
+
+```bash
+./tests/pty/run.sh        # a real terminal: mouse clicks, menus, the wizards
+./tests/ci/docker.sh      # a clean machine: install from nothing, then the suite
+./tests/db/servers.sh     # real servers: SQL Server and Oracle in containers
+```
+
+**The terminal one** drives a real Neovim under a pty and sends actual mouse
+reports, because a headless editor drops mouse input silently — two "verified"
+claims about clicking turned out to be worth nothing. It also creates a Spring
+Boot project through the right-click menu and the real pickers, typing every
+answer, which is the only way the wizards get exercised as a person uses them.
+
+**The clean-machine one** installs the layer into a throwaway HOME on a
+throwaway container and runs the suite there. `./tests/run.sh` boots *your*
+config on purpose, which makes a local pass evidence about one machine; this
+is what catches the rest. It found an explorer that was never installed on a
+fresh config and a version floor that was wrong.
+
+**The server one** starts SQL Server and Oracle in containers and drives this
+layer against them — driver download, connect, metadata, paging, explain, the
+warm process, completion. Twenty checks each. It found the data source tree
+listing 589 `sys` tables and a structure panel that came back empty for a
+table name typed in the wrong case.
+
 ## Keymaps
 
 See [CHEATSHEET.md](CHEATSHEET.md). Leader is `Space`; press it and wait for
@@ -432,18 +458,18 @@ which-key. The quickest way in:
 
 | | |
 |---|---|
-| `<leader>pn` | New project |
-| `<leader>po` | Open project |
-| `<leader>pk` | The cheatsheet |
-| `<leader>M` | Menu (or right-click anywhere) |
-| `<leader>oo` | Run a task |
-| `<leader>pd` | Add a dependency |
-| `<leader>cg` | Generate code |
-| `<leader>fN` | New file from a template |
-| `<leader>or` | Run configuration |
-| `<leader>uf` | Follow external edits |
-| `<leader>pD` | Doctor |
-| `<leader>sC` | Command palette |
+| `Space → p → n` | New project |
+| `Space → p → o` | Open project |
+| `Space → p → k` | The cheatsheet |
+| `Space → M` | Menu (or right-click anywhere) |
+| `Space → o → o` | Run a task |
+| `Space → p → d` | Add a dependency |
+| `Space → c → g` | Generate code |
+| `Space → f → N` | New file from a template |
+| `Space → o → r` | Run configuration |
+| `Space → u → f` | Follow external edits |
+| `Space → p → D` | Doctor |
+| `Space → s → C` | Command palette |
 
 ## Publishing
 
