@@ -29,6 +29,10 @@ vim.g.omni_sql_no_default_maps = 1
 return {
   {
     "tpope/vim-dadbod",
+    -- Pinned: autoload/db/adapter/kjdbc.vim implements dadbod's adapter
+    -- contract, including the `auth_input` opt-out, and dadbod's own resolver
+    -- strips a leading "jdbc:" -- which is why the scheme is kjdbc at all.
+    commit = "6d1d41da4873a445c5605f2005ad2c68c99d8770", -- 2026-01-06
     -- The adapter and the connection store have to exist before the first
     -- :DB, and the store is what dadbod-ui reads for its connection list.
     init = function()
@@ -40,6 +44,12 @@ return {
 
   {
     "kristijanhusak/vim-dadbod-ui",
+    -- Pinned: this layer reads the drawer's tree text, relies on
+    -- populate_tables asking the adapter, and overrides the <leader>S this
+    -- plugin binds in every sql buffer. All three are behaviour, not API.
+    -- Moving it: bump, then ./tests/run.sh and ./tests/pty/run.sh -- the
+    -- explorer cases are the ones that notice.
+    commit = "afd07819d8efcefc3317205b855ad4e3513b0011", -- 2026-06-19
     init = function()
       -- Open the result of clicking a table immediately, the way a database IDE
       -- shows you rows rather than a query you then have to run.

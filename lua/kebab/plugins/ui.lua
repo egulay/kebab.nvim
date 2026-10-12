@@ -15,6 +15,11 @@ vim.o.confirm = true
 return {
   {
     "nvim-neo-tree/neo-tree.nvim",
+    -- Pinned: the layer overrides two of this plugin's nine git markers by
+    -- name, reads its sources through neo-tree.command, and depends on
+    -- get_state_for_window returning nil outside a tree window. Moving it:
+    -- bump, then ./tests/run.sh -- menu_tree_spec is what notices.
+    commit = "ffdf8d93c8db197a5cab072a18cc8da69d490b81", -- 2026-10-05
     init = function()
       require("kebab.explorer").setup()
     end,
