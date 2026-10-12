@@ -100,11 +100,19 @@ a formatter -- which on reflection is the feature rather than a flaw.
   cost was never the language.
 
   What is still missing against a dedicated database IDE: no editable data grid
-  (results are
-  read-only text), no visual query plan, no schema diff or migration
-  generation, no paging beyond `limit` (the preview caps at 200 rows), and no
-  transaction control. Completion covers tables, `table.column`, aliases and
-  types; it does not know about functions, CTEs or subquery scopes.
+  (results are read-only text), no visual query plan, no schema diff or
+  migration generation, and no transaction control -- the first and the last
+  by decision, not omission. Completion covers tables, `table.column`, aliases
+  and types; it does not know about functions, CTEs or subquery scopes.
+
+  ~~SQL Server and Oracle are written and never executed.~~ Done:
+  `tests/db/servers.sh` starts both in containers and drives this layer
+  against them -- 20 checks each, from the driver jar to the warm process. It
+  found two bugs that SQLite and PostgreSQL could not show: the tree listing
+  the server's own catalog (589 `sys` tables on SQL Server, 2049 on Oracle)
+  and a structure panel that came back empty for a table name typed in the
+  wrong case. Still never run against a server: MySQL, MariaDB, H2, DuckDB,
+  ClickHouse.
 - ~~**Startup time has never been measured.**~~ Measured: **21.8 ms** median
   with the full layer against **3.4 ms** for bare `nvim -u NONE`, so the layer
   costs about 18 ms despite 80-odd plugins -- lazy loading is doing its job.
@@ -161,9 +169,17 @@ Three things it surfaced that are worth keeping in mind for any new code here:
 
 ## Packaging
 
-- `setup.sh` installs it from a clone: the lazy spec, the `kebab` command on
-  PATH, then `kebab doctor`. Published under gulay.io. Verified from a fresh
-  clone into a throwaway config, and the clone's own suite passes.
+- **One command installs it**: `install.sh` clones the layer if it has to,
+  clones the LazyVim starter when there is no Neovim config, runs `setup.sh`,
+  installs the plugins and prints what is missing. Verified on a container
+  with none of this machine on it (`tests/ci/docker.sh`), which is also what
+  found the explorer that was never installed and the version floor that was
+  wrong.
+- **CI exists**: `.github/workflows/ci.yml` runs the clean-machine install and
+  the suite on the floor (0.12) and on stable, twice, so an install that is
+  not idempotent fails too.
+- Still one machine, one terminal, one font for everything the pty suite
+  covers: the mouse paths are verified on this terminal only.
 - Decide whether this ships as a plain LazyVim plugin (works for anyone) or
   also as an Omarchy integration. An *Omarchy plugin* is a Quickshell/bar
   artifact, which this is not — at most it would be an install script plus
