@@ -301,8 +301,22 @@ function M.buttons()
     { key = "n", label = "next", desc = "Next page", action = function() M.turn_page(1) end },
     { key = "p", label = "prev", desc = "Previous page", action = function() M.turn_page(-1) end },
     { key = "f", label = "first", desc = "First page", action = function() M.first_page() end },
+    { key = "a", label = "all", desc = "Fetch every row", action = function() M.fetch_all() end },
+    { key = "c", label = "count", desc = "Count the rows", action = function() M.count() end },
     { key = "r", label = "re-run", desc = "Re-run this page", action = function() M.refresh() end },
   }
+end
+
+---The most rows "fetch all" will pull.
+---
+---A cap rather than no limit: "all" on a table of ten million rows would read
+---them into a buffer and take the editor with it. Reaching it is reported.
+function M.fetch_all_cap()
+  local n = tonumber(vim.g.kebab_db_fetch_all_cap)
+  if n and n >= 1 then
+    return math.floor(n)
+  end
+  return 10000
 end
 
 ---The pager lines shown above the rows: where you are, then the buttons.
@@ -328,12 +342,22 @@ function M.pager_line(c, info, width)
     { labels = true, hint = false, gap = "  " },
     { labels = false, hint = false, gap = "  " },
     { labels = false, hint = false, gap = "" },
+    -- last resort: the keys alone. Still usable, still honest about what to
+    -- press; a bar wider than the pane is neither.
+    { labels = false, hint = false, gap = " ", bare = true },
   }
   local bar, spans
   for _, layout in ipairs(layouts) do
     local text, got = "-- ", {}
     for i, b in ipairs(buttons) do
-      local label = layout.labels and ("[ %s %s ]"):format(b.key, b.label) or ("[ %s ]"):format(b.key)
+      local label
+      if layout.bare then
+        label = b.key
+      elseif layout.labels then
+        label = ("[ %s %s ]"):format(b.key, b.label)
+      else
+        label = ("[ %s ]"):format(b.key)
+      end
       got[#got + 1] = { from = #text + 1, to = #text + #label, key = b.key }
       text = text .. label .. (i < #buttons and layout.gap or "")
     end
@@ -354,7 +378,12 @@ function M.pager_line(c, info, width)
   local page = math.floor(offset / size) + 1
   local first = info.shown > 0 and offset + 1 or offset
   local last = offset + info.shown
+  local pager = PAGES[c.url]
   local total = info.more and "more" or tostring(last)
+  if pager and pager.total then
+    -- once counted, say the real total rather than "more"
+    total = tostring(pager.total)
+  end
   -- Where the rows came from is worth saying: "held" means the statement ran
   -- once and this is the next batch off the same result set, which is the only
   -- mode that stays consistent while someone else is writing to the table.
@@ -539,6 +568,81 @@ function M.refresh()
   M.fetch(c)
 end
 
+---Every row of the current statement, in one grid, up to the cap.
+---
+---One request with a big page rather than a loop of batches: a loop would
+---stitch together as many headers as there were batches, and the point of
+---"all" is a single grid to read or copy.
+function M.fetch_all()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  local pager = c and PAGES[c.url]
+  if not pager then
+    return vim.notify("Nothing has been run yet", vim.log.levels.WARN)
+  end
+  local cap = M.fetch_all_cap()
+  db.ensure_credentials(c.url)
+  local paged = db.page_sql(c.url, pager.sql, 0, cap + 1)
+  local lines, err
+  if paged then
+    lines, err = jdbc.run(c.url, "page", { args = { ("0:%d"):format(cap) }, stdin = paged, timeout = 600000 })
+  end
+  if not lines then
+    lines, err = jdbc.run(c.url, "page", {
+      args = { ("0:%d"):format(cap),
+      }, stdin = pager.sql, timeout = 600000 })
+  end
+  if not lines then
+    return M.failed(c, err)
+  end
+  local rows, info = M.split_footer(lines)
+  info = info or { shown = #rows, more = false }
+  local header = ("-- %s · %s%d row%s"):format(
+    c.name,
+    info.more and ("the first ") or "all ",
+    info.shown,
+    info.shown == 1 and "" or "s")
+  if info.more then
+    header = header .. (", stopped at the cap (vim.g.kebab_db_fetch_all_cap = %d)"):format(cap)
+  end
+  -- The pager no longer describes what is on screen, so it goes.
+  PAGES[c.url] = nil
+  M.show_rows(c, vim.list_extend({ header, "" }, rows))
+  return true
+end
+
+---How many rows the current statement returns.
+---
+---On demand, never automatically: `count(*)` is a full scan on a large table,
+---and it would double every query this pane runs.
+function M.count()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  local pager = c and PAGES[c.url]
+  if not pager then
+    return vim.notify("Nothing has been run yet", vim.log.levels.WARN)
+  end
+  db.ensure_credentials(c.url)
+  local lines, err = db.query(c, db.count_sql(c.url, pager.sql))
+  if not lines then
+    vim.notify(tostring(err), vim.log.levels.ERROR)
+    return false, err
+  end
+  -- the number is in the grid the runner printed; find the first integer in it
+  local total
+  for _, line in ipairs(lines) do
+    total = total or line:match("^%s*(%d+)%s*$") or line:match("^%s*(%d+)%s*|")
+  end
+  pager.total = total and tonumber(total) or nil
+  if pager.total then
+    vim.notify(("%s · %d row%s in total"):format(c.name, pager.total, pager.total == 1 and "" or "s"))
+    M.render(c, (pager.pages[math.floor(pager.offset / M.page_size()) + 1] or {}).rows or {}, pager.info)
+  else
+    vim.notify("Could not read the count from: " .. table.concat(lines, " "), vim.log.levels.WARN)
+  end
+  return pager.total
+end
+
 ---Open a table the way double clicking one in a database IDE does: its select
 ---in the statement pane, its first page of rows underneath, cursor left in the
 ---statement so the next thing you type edits the query.
@@ -654,6 +758,13 @@ function M.bind_rows(buf)
   for _, b in ipairs(M.buttons()) do
     vim.keymap.set("n", b.key, b.action, { buffer = buf, desc = b.desc })
   end
+  -- One cell on its own: `v` for view, and Enter because that is what a grid
+  -- does in every other tool.
+  for _, key in ipairs({ "v", "<CR>" }) do
+    vim.keymap.set("n", key, function()
+      M.show_cell()
+    end, { buffer = buf, desc = "View the cell under the cursor" })
+  end
   -- A click on a button runs it; a click anywhere else behaves like a click.
   vim.keymap.set("n", "<LeftMouse>", function()
     local pos = vim.fn.getmousepos()
@@ -706,6 +817,9 @@ function M.setup()
   local commands = {
     IdeDbRun = { M.run_current, "Run the statement under the cursor" },
     IdeDbStructure = { function() M.structure_prompt() end, "How a table is built: columns, keys, indexes" },
+    IdeDbFetchAll = { M.fetch_all, "Every row of the current statement, in one grid" },
+    IdeDbCount = { M.count, "How many rows the current statement returns" },
+    IdeDbCell = { function() M.show_cell() end, "Show the cell under the cursor on its own" },
     IdeDbRunAll = { M.run_all, "Run every statement in this buffer" },
     IdeDbNextPage = { function() M.turn_page(1) end, "Next page of rows" },
     IdeDbPrevPage = { function() M.turn_page(-1) end, "Previous page of rows" },
@@ -717,6 +831,165 @@ function M.setup()
       spec[1]()
     end, { desc = spec[2] })
   end
+end
+
+-- ----------------------------------------------------------- one cell
+--
+-- A grid is the wrong shape for a long value: a JSON document or a paragraph
+-- of text makes one column wider than the pane and pushes everything else off
+-- the side. Every database IDE answers this the same way -- show the row, and
+-- let one cell be opened on its own.
+--
+-- The runner prints the grid aligned, with ` | ` between columns and a `-+-`
+-- rule under the header, so the rule is the authority on where a column
+-- starts and ends: counting separators in a data row would be fooled by a
+-- value containing " | ".
+
+---Byte ranges of each column, read from the rule line. Pure.
+---@param rule string the `---+---` line under the header
+---@return table[] ranges { from, to }, 1-based inclusive
+function M.column_ranges(rule)
+  local ranges, from = {}, 1
+  local at = 1
+  while true do
+    local plus = rule:find("+", at, true)
+    if not plus then
+      break
+    end
+    ranges[#ranges + 1] = { from = from, to = plus - 2 }
+    from = plus + 2
+    at = plus + 1
+  end
+  ranges[#ranges + 1] = { from = from, to = #rule }
+  return ranges
+end
+
+---The cell under a position in a rendered grid. Pure, so it is tested without
+---a window.
+---@param lines string[] the whole rows pane
+---@param row integer 1-based line number
+---@param col integer 1-based column
+---@return table|nil cell { column, value, row, index }
+function M.cell_at(lines, row, col)
+  -- find the header and its rule: everything above them is the pager
+  local header_at
+  for i = 1, #lines - 1 do
+    if lines[i + 1]:match("^%-+%+?") and lines[i + 1]:find("-") and lines[i]:find("|") then
+      header_at = i
+      break
+    end
+  end
+  if not header_at or row <= header_at + 1 then
+    return nil
+  end
+  local line = lines[row]
+  if not line or line == "" then
+    return nil
+  end
+  local ranges = M.column_ranges(lines[header_at + 1])
+  local header = lines[header_at]
+  for index, range in ipairs(ranges) do
+    if col >= range.from and col <= range.to + 1 then
+      return {
+        column = vim.trim(header:sub(range.from, range.to)),
+        value = vim.trim(line:sub(range.from, range.to)),
+        row = row,
+        index = index,
+      }
+    end
+  end
+  return nil
+end
+
+---Lay a single value out for reading: JSON indented, anything else wrapped.
+---@param value string
+---@param width integer
+---@return string[] lines, string kind
+function M.render_cell(value, width)
+  width = math.max(20, width or 80)
+  if value == "NULL" then
+    return { "NULL" }, "null"
+  end
+  -- JSON is the case that matters: a document on one line is unreadable, and
+  -- it is what half the interesting columns hold now.
+  local trimmed = vim.trim(value)
+  if trimmed:match("^[%[{]") then
+    local ok, decoded = pcall(vim.json.decode, trimmed)
+    if ok and type(decoded) == "table" then
+      local pretty = require("kebab.jsonfile").pretty(vim.json.encode(decoded))
+      if type(pretty) == "table" then
+        return pretty, "json"
+      end
+    end
+  end
+  if #value <= width then
+    return { value }, "text"
+  end
+  -- wrap on spaces where there are any, hard otherwise: a base64 blob has none
+  local out, line = {}, ""
+  for word in value:gmatch("%S+") do
+    if line == "" then
+      line = word
+    elseif #line + 1 + #word <= width then
+      line = line .. " " .. word
+    else
+      out[#out + 1] = line
+      line = word
+    end
+    while #line > width do
+      out[#out + 1] = line:sub(1, width)
+      line = line:sub(width + 1)
+    end
+  end
+  if line ~= "" then
+    out[#out + 1] = line
+  end
+  return out, "text"
+end
+
+---Show the cell under the cursor on its own.
+function M.show_cell()
+  local buf = vim.api.nvim_get_current_buf()
+  if not vim.b[buf].kebab_db_output then
+    return vim.notify("This is not a result grid", vim.log.levels.WARN)
+  end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local cell = M.cell_at(lines, row, col + 1)
+  if not cell then
+    return vim.notify("No cell here", vim.log.levels.WARN)
+  end
+
+  local width = math.min(100, math.max(40, vim.o.columns - 20))
+  local body, kind = M.render_cell(cell.value, width - 4)
+  local float = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(float, 0, -1, false, body)
+  vim.bo[float].modifiable = false
+  vim.bo[float].filetype = kind == "json" and "json" or "text"
+  local height = math.min(#body + 1, math.max(5, vim.o.lines - 8))
+  local win = vim.api.nvim_open_win(float, true, {
+    relative = "editor",
+    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+    width = width,
+    height = height,
+    border = "rounded",
+    title = (" %s  ·  %s  ·  q to close "):format(cell.column, kind),
+    style = "minimal",
+  })
+  vim.wo[win].wrap = false
+  for _, key in ipairs({ "q", "<Esc>" }) do
+    vim.keymap.set("n", key, function()
+      pcall(vim.api.nvim_win_close, win, true)
+    end, { buffer = float, desc = "Close" })
+  end
+  -- copying the value is the other half of looking at it
+  vim.keymap.set("n", "y", function()
+    vim.fn.setreg("+", cell.value)
+    vim.fn.setreg('"', cell.value)
+    vim.notify(("Copied %s (%d characters)"):format(cell.column, #cell.value))
+  end, { buffer = float, desc = "Copy the value" })
+  return cell
 end
 
 -- ------------------------------------------------------------- structure

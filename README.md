@@ -227,6 +227,12 @@ indexes
 All of it comes from JDBC's own metadata, so it works on every driver rather
 than on the two whose dialect someone remembered.
 
+In the grid, `v` or `Enter` opens the cell under the cursor on its own — JSON
+indented, long text wrapped, `y` to copy, `q` to close — because a document on
+one line makes a column wider than the pane and pushes the rest off the side.
+`a` fetches every row (capped by `vim.g.kebab_db_fetch_all_cap`, 10000) and `c`
+counts them: on demand, never automatically, since `count(*)` is a full scan.
+
 | | |
 |---|---|
 | `<leader>DD` | Database explorer |

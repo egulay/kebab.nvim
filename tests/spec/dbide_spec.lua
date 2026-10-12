@@ -356,12 +356,18 @@ H.describe("paging the rows", function()
     H.matches("%[ p prev %]", bar)
     H.matches("%[ f first %]", bar)
     H.matches("%[ r re%-run %]", bar)
-    H.matches("run: Ctrl%+Enter", bar)
+    -- The hint only fits when there is room for it: six buttons already fill
+    -- eighty columns, and the buttons are the control, so the hint goes first.
+    local _, wide = I.pager_line(c, { offset = 0, shown = 1, more = false }, 200)
+    H.matches("run: Ctrl%+Enter", wide)
+    local _, narrow = I.pager_line(c, { offset = 0, shown = 1, more = false }, 44)
+    H.matches("%[ n", narrow, "the buttons stay however narrow it gets: " .. narrow)
+    H.ok(#narrow <= 44, ("the bar must fit %d columns, got %d"):format(44, #narrow))
     for _, line in ipairs({ where, bar }) do
       H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
     end
     -- and each button's columns, which is what makes it clickable
-    H.eq(4, #spans)
+    H.eq(#I.buttons(), #spans, "every button needs its own clickable span")
     for _, span in ipairs(spans) do
       H.matches("^%[ " .. span.key .. " ", bar:sub(span.from, span.to), "the span should cover its own button")
     end
@@ -571,6 +577,255 @@ H.describe("paging the rows", function()
     local text = table.concat(vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false), "\n")
     H.matches("not paged", text, "got: " .. text:sub(1, 160))
     H.matches("1", text)
+  end)
+end)
+
+H.describe("one cell on its own", function()
+  -- A grid is the wrong shape for a long value: a JSON document makes one
+  -- column wider than the pane and pushes the rest off the side. Reading
+  -- somebody's data in front of them means being able to open one cell.
+  -- Built from the cells rather than typed out: a hand-written grid whose rule
+  -- is one dash short of its data silently cuts the last character off a
+  -- value, and then the test is wrong in exactly the way the code would be.
+  local JSON = '{"a":1,"b":[2,3],"c":{"d":"deep"}}'
+  local GRID = (function()
+    local headers = { "id", "payload", "note" }
+    local rows = { { "1", JSON, "hi" }, { "2", "NULL", "x" } }
+    local width = {}
+    for i, name in ipairs(headers) do
+      width[i] = #name
+      for _, row in ipairs(rows) do
+        width[i] = math.max(width[i], #row[i])
+      end
+    end
+    local function join(cells, sep, pad)
+      local out = {}
+      for i, cell in ipairs(cells) do
+        out[i] = cell .. string.rep(pad, width[i] - #cell)
+      end
+      return table.concat(out, sep)
+    end
+    local lines = {
+      "-- shop · rows 1-2 of 2",
+      "-- [ n next ]  [ p prev ]",
+      "",
+      join(headers, " | ", " "),
+      join({ "", "", "" }, "-+-", "-"),
+    }
+    for _, row in ipairs(rows) do
+      lines[#lines + 1] = join(row, " | ", " ")
+    end
+    return lines
+  end)()
+
+  H.it("reads the column boundaries off the rule, not off a data row", function()
+    -- A value containing " | " would fool anything that counted separators in
+    -- the row itself.
+    local ranges = I.column_ranges(GRID[5])
+    H.eq(3, #ranges)
+    H.eq(1, ranges[1].from)
+    H.eq("id", vim.trim(GRID[4]:sub(ranges[1].from, ranges[1].to)))
+    H.eq("payload", vim.trim(GRID[4]:sub(ranges[2].from, ranges[2].to)))
+    H.eq("note", vim.trim(GRID[4]:sub(ranges[3].from, ranges[3].to)))
+  end)
+
+  H.it("finds the cell under a position", function()
+    H.eq("id", I.cell_at(GRID, 6, 1).column)
+    H.eq("1", I.cell_at(GRID, 6, 1).value)
+    local payload = I.cell_at(GRID, 6, 10)
+    H.eq("payload", payload.column)
+    H.eq(JSON, payload.value)
+    H.eq("hi", I.cell_at(GRID, 6, #GRID[6] - 1).value)
+    H.eq("NULL", I.cell_at(GRID, 7, 10).value)
+  end)
+
+  H.it("refuses the header, the rule and the pager lines", function()
+    for _, row in ipairs({ 1, 2, 3, 4, 5 }) do
+      H.eq(nil, I.cell_at(GRID, row, 2), ("line %d is not data"):format(row))
+    end
+  end)
+
+  H.it("indents JSON, because that is half the interesting columns", function()
+    local body, kind = I.render_cell('{"name":"ada","tags":["a","b"]}', 60)
+    H.eq("json", kind)
+    H.ok(#body > 3, "a document on one line is unreadable; got " .. #body .. " lines")
+    H.matches('"name"', table.concat(body, "\n"))
+  end)
+
+  H.it("wraps long text to the width it is given", function()
+    local body, kind = I.render_cell(string.rep("the quick brown fox ", 8), 40)
+    H.eq("text", kind)
+    for _, line in ipairs(body) do
+      H.ok(#line <= 40, ("%d characters does not fit in 40: %q"):format(#line, line))
+    end
+  end)
+
+  H.it("wraps a value with no spaces in it at all", function()
+    -- base64, a hash, a hex blob: nothing to break on, and a viewer that
+    -- cannot show it is no viewer.
+    local body = I.render_cell(string.rep("QUJDREVG", 20), 30)
+    H.ok(#body > 1)
+    for _, line in ipairs(body) do
+      H.ok(#line <= 30, ("%d characters does not fit in 30"):format(#line))
+    end
+  end)
+
+  H.it("says NULL is null", function()
+    local body, kind = I.render_cell("NULL", 40)
+    H.eq({ "NULL" }, body)
+    H.eq("null", kind)
+  end)
+
+  H.it("opens on the cell under the cursor, and closes", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = fixture()
+    H.ok(I.open_table(c, "customers"))
+    local rows
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then rows = w end
+    end
+    H.ok(rows, "the rows pane should be there")
+    vim.api.nvim_set_current_win(rows)
+    -- the first data row: pager line, bar, blank, header, rule, then data
+    vim.api.nvim_win_set_cursor(rows, { 6, 5 })
+    local before = #vim.api.nvim_list_wins()
+    local cell = I.show_cell()
+    H.ok(cell, "a cell should have been found")
+    H.eq(before + 1, #vim.api.nvim_list_wins(), "a window should have opened for it")
+    local float = vim.api.nvim_get_current_win()
+    H.ok(vim.api.nvim_win_get_config(float).relative ~= "", "and it should float over the grid")
+    local keys = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(float), "n")) do
+      keys[m.lhs] = true
+    end
+    H.ok(keys.q and keys.y, "q closes it and y copies the value")
+    vim.api.nvim_feedkeys("q", "mx", false)
+    H.eq(before, #vim.api.nvim_list_wins(), "q should have closed it")
+  end)
+
+  H.it("is bound on the grid and nowhere else", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = fixture()
+    I.layout(c)
+    local rows, editor
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then rows = b end
+      if vim.b[b].kebab_db_editor then editor = b end
+    end
+    local function has(buf, lhs)
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+        if m.lhs == lhs then return true end
+      end
+      return false
+    end
+    H.ok(has(rows, "v"), "v should view a cell in the grid")
+    H.ok(has(rows, "<CR>"), "and Enter, which is what a grid does elsewhere")
+    H.ok(not has(editor, "v"), "but v is visual mode in the pane where you type")
+  end)
+end)
+
+H.describe("counting and fetching everything", function()
+  local many_url
+  local function many()
+    if many_url then
+      return { name = "many", url = many_url }
+    end
+    local file = H.tmpdir("dbide-all") .. "/many.sqlite"
+    local rows = {}
+    for i = 1, 250 do
+      rows[#rows + 1] = ("insert into nums (label) values ('row %d');"):format(i)
+    end
+    H.eq(0, vim.system({ "sqlite3", file }, {
+      stdin = "create table nums (id integer primary key, label text);\n" .. table.concat(rows, "\n"),
+      text = true,
+    }):wait(60000).code)
+    many_url = "jdbc:sqlite:" .. file
+    return { name = "many", url = many_url }
+  end
+
+  local function rows_pane()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then
+        return b
+      end
+    end
+  end
+
+  local function data_rows()
+    local n = 0
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false)) do
+      if line:match("^%d+%s+|") then
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  H.it("counts the statement, not the table", function()
+    -- A filtered select has its own total, so the count wraps the statement.
+    local D = require("kebab.db")
+    H.eq("select count(*) as kebab_rows from (select * from t where x > 1) kebab_count",
+      D.count_sql("jdbc:postgresql://h/d", "select * from t where x > 1;"))
+  end)
+
+  H.it("says how many rows there are, on demand", function()
+    -- On demand and never automatically: count(*) is a full scan on a large
+    -- table, and doing it with every query would double the cost of the pane.
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local notes = H.capture_notify(function()
+      H.eq(250, I.count())
+    end)
+    H.matches("250 rows in total", table.concat(vim.tbl_map(function(n) return n.msg end, notes), " "))
+    -- and the line above the rows stops saying "more" once it knows
+    H.matches("rows 1%-100 of 250", vim.api.nvim_buf_get_lines(rows_pane(), 0, 1, false)[1])
+  end)
+
+  H.it("fetches every row into one grid", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    H.eq(100, data_rows(), "one page to start with")
+    H.ok(I.fetch_all())
+    H.eq(250, data_rows(), "and all of them after")
+    H.matches("all 250 rows", vim.api.nvim_buf_get_lines(rows_pane(), 0, 1, false)[1])
+    H.eq(nil, I.pager(c.url), "the pager no longer describes what is on screen")
+  end)
+
+  H.it("stops at the cap and says so", function()
+    -- "all" on a ten million row table would read them into a buffer and take
+    -- the editor with it.
+    requires_jdbc()
+    vim.cmd("only")
+    local saved = vim.g.kebab_db_fetch_all_cap
+    vim.g.kebab_db_fetch_all_cap = 30
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    H.ok(I.fetch_all())
+    local header = vim.api.nvim_buf_get_lines(rows_pane(), 0, 1, false)[1]
+    local shown = data_rows()
+    vim.g.kebab_db_fetch_all_cap = saved
+    H.eq(30, shown)
+    H.matches("the first 30 rows", header)
+    H.matches("stopped at the cap", header)
+    H.matches("kebab_db_fetch_all_cap", header, "and name the setting that caps it")
+  end)
+
+  H.it("offers both as a button and a key", function()
+    local keys = {}
+    for _, b in ipairs(I.buttons()) do
+      keys[b.key] = b.label
+    end
+    H.eq("all", keys.a)
+    H.eq("count", keys.c)
   end)
 end)
 

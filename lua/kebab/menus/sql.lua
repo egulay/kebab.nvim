@@ -16,6 +16,11 @@ local rows = {
   { name = "Previous Page", cmd = A.ex("IdeDbPrevPage"), rtxt = "<leader>Db" },
   { name = "First Page", cmd = A.ex("IdeDbFirstPage"), rtxt = "<leader>Df" },
   { name = "separator" },
+  { name = "View This Cell", cmd = A.ex("IdeDbCell"), rtxt = ":IdeDbCell" },
+  { name = "separator" },
+  { name = "Fetch Every Row", cmd = A.ex("IdeDbFetchAll"), rtxt = ":IdeDbFetchAll" },
+  { name = "Count the Rows", cmd = A.ex("IdeDbCount"), rtxt = ":IdeDbCount" },
+  { name = "separator" },
   { name = "Re-run This Page", cmd = A.ex("IdeDbRefreshPage"), rtxt = "<leader>DR" },
 }
 

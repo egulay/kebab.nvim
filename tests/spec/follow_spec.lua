@@ -330,8 +330,12 @@ H.describe("the watcher", function()
   end)
 
   H.it("still follows an external write to a file we saved earlier", function()
-    -- The record is consumed, so an agent writing the same file moments after
-    -- you did is not swallowed as well.
+    -- Our own writes are suppressed for own_write_ms and no longer, so a file
+    -- you once saved does not go deaf to everyone else. The window is
+    -- shortened here rather than waiting the default out -- and restored,
+    -- because leaking it fails the next test instead of this one.
+    local saved_cfg = vim.g.kebab_follow
+    vim.g.kebab_follow = { own_write_ms = 100 }
     local dir = H.tmpdir("follow-own-then")
     local path = dir .. "/shared.txt"
     H.write(path, "before")
@@ -341,13 +345,16 @@ H.describe("the watcher", function()
     vim.cmd("edit " .. vim.fn.fnameescape(path))
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "mine" })
     vim.cmd("silent write")
-    vim.wait(1200, function() return false end, 100)
+    vim.wait(400, function() return false end, 50)
 
+    local before = F.state()
     vim.system({ "sh", "-c", ("printf 'theirs\n' > %q"):format(path) }):wait(20000)
     local seen = vim.wait(10000, function()
-      return F.state().pending > 0 or F.state().count > 0
+      local now = F.state()
+      return now.pending > before.pending or now.count > before.count
     end, 100)
     F.stop()
+    vim.g.kebab_follow = saved_cfg
     H.ok(seen, "a later external write to the same file must still be followed")
   end)
 

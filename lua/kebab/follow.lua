@@ -433,8 +433,19 @@ function M.note_own_write(path)
   return true
 end
 
----Was this change ours? Consumes the record, so a second change to the same
----path -- an agent writing it right after you did -- is not swallowed too.
+---Was this change ours?
+---
+---Time-limited, and *not* consumed on the first match. One `:w` produces
+---several inotify events -- a write, an attribute change, and for a plugin
+---that writes through a temp file a create and a rename as well -- so
+---consuming the record made the first event ours and every one after it
+---somebody else's. That is exactly the bug this was meant to fix, and it made
+---the spec flaky rather than failing: whichever event arrived first decided
+---the answer.
+---
+---The cost is a window of `own_write_ms` in which an external write to a file
+---*you* just saved is attributed to you. 1.5 seconds, against several events
+---per save as the normal case: the right way round.
 ---@param path string
 function M.is_own_write(path)
   local key = vim.fs.normalize(path)
@@ -442,8 +453,11 @@ function M.is_own_write(path)
   if not at then
     return false
   end
-  OWN[key] = nil
-  return (vim.uv.now() - at) <= M.own_write_ms()
+  if (vim.uv.now() - at) <= M.own_write_ms() then
+    return true
+  end
+  OWN[key] = nil -- stale: stop holding it against future changes
+  return false
 end
 
 ---Forget every noted write. Called by stop(), so a new session starts clean.

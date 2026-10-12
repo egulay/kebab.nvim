@@ -441,6 +441,20 @@ function M.paging_dialects()
   return vim.tbl_keys(PAGING)
 end
 
+---A statement that counts the rows `sql` would return.
+---
+---Wrapped, like a page is, so it counts the user's own statement rather than a
+---table -- a filtered select has its own total. Separate from paging on
+---purpose: an industry SQL editor does not count by default either, because
+---`count(*)` on a large table is a full scan and nobody asked for one.
+---@param url string
+---@param sql string
+---@return string
+function M.count_sql(url, sql)
+  local inner = (sql:gsub("%s*;%s*$", ""))
+  return ("select count(*) as kebab_rows from (%s) kebab_count"):format(inner)
+end
+
 ---A statement that asks the server for one page of `sql`.
 ---
 ---Server-side on purpose. The first version of paging read the whole result
