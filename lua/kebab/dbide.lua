@@ -210,6 +210,15 @@ function M.output(c)
   local out = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(out, buf)
   pin(out)
+  -- No gutter on a result grid. Line numbers beside data are noise -- no
+  -- database IDE shows them -- and they also shift every column to the right,
+  -- so a click lands several characters left of what it looked like it hit.
+  for option, value in pairs({ number = false, relativenumber = false, signcolumn = "no",
+    foldcolumn = "0", cursorline = true, wrap = false }) do
+    pcall(function()
+      vim.wo[out][option] = value
+    end)
+  end
   local total = vim.api.nvim_win_get_height(editor) + vim.api.nvim_win_get_height(out)
   vim.api.nvim_win_set_height(out, math.max(3, math.floor(total * M.output_fraction())))
   return out
@@ -767,16 +776,36 @@ function M.bind_rows(buf)
       M.show_cell()
     end, { buffer = buf, desc = "View the cell under the cursor" })
   end
-  -- A click on a button runs it; a click anywhere else behaves like a click.
+  M.bind_click(buf)
+end
+
+---A click on a pager button runs it, from whichever pane has focus.
+---
+---The mapping has to be on *both* panes. A buffer-local `<LeftMouse>` only
+---fires when that buffer is the current one, so with the cursor in the
+---statement pane the first click on a button merely moved focus to the grid
+---and did nothing -- you had to click twice. Every other tool acts on the
+---first click.
+---@param buf integer
+function M.bind_click(buf)
   vim.keymap.set("n", "<LeftMouse>", function()
     local pos = vim.fn.getmousepos()
-    local spans = vim.b[buf].kebab_db_spans
-    if pos.line == 2 and type(spans) == "table" then
-      for _, span in ipairs(spans) do
-        if pos.column >= span.from and pos.column <= span.to then
-          for _, b in ipairs(M.buttons()) do
-            if b.key == span.key then
-              return b.action()
+    local clicked = pos.winid ~= 0 and vim.api.nvim_win_is_valid(pos.winid)
+      and vim.api.nvim_win_get_buf(pos.winid)
+      or nil
+    -- the bar belongs to the rows pane, wherever the click came from
+    if clicked and vim.b[clicked].kebab_db_output and pos.line == 2 then
+      local spans = vim.b[clicked].kebab_db_spans
+      if type(spans) == "table" then
+        for _, span in ipairs(spans) do
+          if pos.column >= span.from and pos.column <= span.to then
+            for _, b in ipairs(M.buttons()) do
+              if b.key == span.key then
+                -- act in the clicked window, so the pager reads the right
+                -- buffer's connection
+                vim.api.nvim_set_current_win(pos.winid)
+                return b.action()
+              end
             end
           end
         end
@@ -793,6 +822,9 @@ function M.bind_editor(buf)
   -- over the global <leader>S (dadbod's own exec, which opens a result window
   -- of its own and would leave two).
   M.bind_pager(buf)
+  -- and the click handler, so a button works on the first click even when the
+  -- cursor is over here
+  M.bind_click(buf)
 end
 
 -- --------------------------------------------------------------- the tree

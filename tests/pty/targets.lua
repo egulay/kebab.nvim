@@ -40,9 +40,15 @@ local function editor_win()
 end
 
 ---Screen position of a buffer line and column in a window. 1-based.
+---
+---`textoff` is the width of the window's gutter -- numbers, signs, folds. A
+---click computed without it lands that many characters to the left of the
+---intended text, which looked exactly like a button that did not work.
 local function screen_at(win, line, col)
   local pos = vim.api.nvim_win_get_position(win)
-  return pos[1] + line, pos[2] + col
+  local info = vim.fn.getwininfo(win)[1]
+  local gutter = info and info.textoff or 0
+  return pos[1] + line, pos[2] + gutter + col
 end
 
 ---The first line in `win` whose text matches `pattern`, 1-based, or nil.
@@ -62,18 +68,45 @@ function M.collect()
   local out = {}
   local tree = tree_win()
   if tree then
-    -- The nodes are named by what they are, not by where they sit: a
-    -- connection line, the Tables group, the first table under it.
-    local names = {
-      connection = "󰆼",
-      tables = "Tables",
-      table = "^%s+▸  ",
-    }
-    for name, pattern in pairs(names) do
-      local line = line_matching(tree, pattern)
-      if line then
-        local row, col = screen_at(tree, line, 6)
-        out[name] = { row = row, col = col }
+    -- Resolved through the layer's own functions rather than by pattern. A
+    -- pattern for "a collapsed node" matched `▸ Saved queries (0)`, which sits
+    -- above the tables, so the click expanded that and the case failed as
+    -- though the double click were broken.
+    local ok, dbide = pcall(require, "kebab.dbide")
+    local saved = ok and (require("kebab.db").connections()) or {}
+    local names = vim.tbl_map(function(c) return c.name end, saved)
+    local buf = vim.api.nvim_win_get_buf(tree)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+    for i, text in ipairs(lines) do
+      local bare = vim.trim((text:gsub("^[^%w_]*", "")))
+      -- the connection line: its name, with or without a status marker
+      if not out.connection then
+        for _, name in ipairs(names) do
+          if bare == name or bare:match("^" .. vim.pesc(name) .. "%s") then
+            local row, col = screen_at(tree, i, 6)
+            out.connection = { row = row, col = col }
+          end
+        end
+      end
+      if not out.tables and bare:match("^Tables") then
+        local row, col = screen_at(tree, i, 8)
+        out.tables = { row = row, col = col }
+      end
+      -- a table: whatever the layer itself recognises as one on that line
+      if not out.table and ok and #names > 0 then
+        local owner = dbide.connection_above(lines, i, names)
+        local c = owner and require("kebab.db").connection(owner)
+        if c then
+          local known = require("kebab.dbcomplete").table_names(c.url)
+          if #known == 0 then
+            known = require("kebab.db").tables(c) or {}
+          end
+          if dbide.table_on_line(text, known) then
+            local row, col = screen_at(tree, i, 10)
+            out.table = { row = row, col = col }
+          end
+        end
       end
     end
   end
@@ -140,8 +173,14 @@ function M.collect()
         for _, chunk in ipairs(chunks) do
           text = text .. chunk[1]
         end
-        local word = vim.trim(text):match("^(%a[%w%-]*)")
-        if word then
+        -- The label only, slugged. Two traps in a row here: naming a target
+        -- by the first word made "Run Statement" and "Run Whole Buffer"
+        -- collide, and slugging the whole line folded in the shortcut printed
+        -- after it ("run_statement_ctrl_enter"). The label is everything
+        -- before the run of spaces that separates it from its key.
+        local label = vim.trim(text):gsub("%s%s+.*$", "")
+        local word = label:lower():gsub("[^%w]+", "_"):gsub("^_", ""):gsub("_$", "")
+        if word ~= "" then
           -- mark[2] is the 0-based row inside the float; a bordered window
           -- draws its first row one line down from its own position
           local row, col = screen_at(w, mark[2] + 2, 4)

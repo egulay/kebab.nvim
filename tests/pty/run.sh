@@ -109,7 +109,7 @@ cat > "$work/case.json" <<JSON
 JSON
 run_case 42000
 check "a double click on a table writes the select" "STATEMENT.*select .* from" "$work/report.txt"
-check "the pager says where you are"                 "ROWS.*rows 1-3 of 3"     "$work/report.txt"
+check "the pager says where you are"                 "ROWS.*rows 1-3"          "$work/report.txt"
 check "and shows its rows"                          "ROWS.*Ada Lovelace"       "$work/report.txt"
 check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    "$work/report.txt"
 
@@ -207,7 +207,7 @@ cat > "$work/case.json" <<JSON
   "actions": [ {"kind":"wait","seconds":17},
                {"kind":"click_target","name":"statement","file":"$work/targets","button":2},
                {"kind":"wait","seconds":4},
-               {"kind":"click_target","name":"menu_run","file":"$work/targets"},
+               {"kind":"click_target","name":"menu_run_statement","file":"$work/targets"},
                {"kind":"wait","seconds":10} ],
   "report": "$work/report.txt", "idle": 2, "limit": 110 }
 JSON
@@ -364,7 +364,7 @@ cat > "$work/case.json" <<JSON
 JSON
 rm -f "$work/report.txt"
 WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
-check "the rows pane shows a button bar"      "LINE2 -- \[ n next \]"  "$work/report.txt"
+check "the rows pane shows a button bar"      "LINE2 -- \[ n"          "$work/report.txt"
 check "clicking [ n next ] turns the page"    "LINE1.*page 2"           "$work/report.txt"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

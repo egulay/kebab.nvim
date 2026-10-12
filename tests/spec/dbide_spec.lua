@@ -891,6 +891,30 @@ H.describe("one cell on its own", function()
     H.eq(before, #vim.api.nvim_list_wins(), "q should have closed it")
   end)
 
+  H.it("answers a click on a button from either pane", function()
+    -- A buffer-local <LeftMouse> only fires when that buffer is current, so
+    -- with the cursor in the statement pane the first click on a pager button
+    -- merely moved focus to the grid and did nothing: you had to click twice.
+    requires_jdbc()
+    vim.cmd("only")
+    local c = fixture()
+    I.layout(c)
+    local rows, editor
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then rows = b end
+      if vim.b[b].kebab_db_editor then editor = b end
+    end
+    local function click_bound(buf)
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+        if m.lhs == "<LeftMouse>" then return true end
+      end
+      return false
+    end
+    H.ok(click_bound(rows), "the grid should answer a click")
+    H.ok(click_bound(editor), "and so should the statement pane, for a click that lands on the bar")
+  end)
+
   H.it("is bound on the grid and nowhere else", function()
     requires_jdbc()
     vim.cmd("only")
