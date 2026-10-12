@@ -210,9 +210,11 @@ function H.stub_ui(answers)
   local orig_select, orig_input = vim.ui.select, vim.ui.input
   local i = 0
   local log = {}
-  local function next_answer(kind, prompt)
+  local function next_answer(kind, prompt, default)
     i = i + 1
-    log[#log + 1] = { kind = kind, prompt = prompt, index = i }
+    -- `default` is what the box is prefilled with, which is the whole answer
+    -- to "what does the wizard offer me?" -- assertable only if recorded.
+    log[#log + 1] = { kind = kind, prompt = prompt, index = i, default = default }
     if i > #answers then
       error(("ui.%s asked for answer #%d (%s) but only %d were scripted")
         :format(kind, i, tostring(prompt), #answers), 0)
@@ -240,7 +242,7 @@ function H.stub_ui(answers)
   end
 
   vim.ui.input = function(opts, on_confirm)
-    local a = next_answer("input", opts and opts.prompt)
+    local a = next_answer("input", opts and opts.prompt, opts and opts.default)
     if a == H.CANCEL then return on_confirm(nil) end
     if a == H.DEFAULT then return on_confirm(opts and opts.default) end
     return on_confirm(a)

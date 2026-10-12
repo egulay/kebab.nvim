@@ -126,9 +126,15 @@ vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 package.path = vim.env.HERE .. "/?.lua;" .. package.path
 require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
-vim.defer_fn(function()
+-- Not a fixed delay: db mode's setup is scheduled and tears down windows
+-- twice on the way, so a table opened too early is opened into a layout that
+-- is about to be rebuilt. @see targets.when
+require("targets").when(function()
+  local I = require("kebab.dbide")
+  return I.tree_win() ~= nil and require("kebab.db").connection("shop") ~= nil
+end, function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
-end, 7000)
+end)
 vim.defer_fn(function()
   local out = {}
   for _, w in ipairs(vim.api.nvim_list_wins()) do
@@ -178,9 +184,15 @@ vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 package.path = vim.env.HERE .. "/?.lua;" .. package.path
 require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
-vim.defer_fn(function()
+-- Not a fixed delay: db mode's setup is scheduled and tears down windows
+-- twice on the way, so a table opened too early is opened into a layout that
+-- is about to be rebuilt. @see targets.when
+require("targets").when(function()
+  local I = require("kebab.dbide")
+  return I.tree_win() ~= nil and require("kebab.db").connection("shop") ~= nil
+end, function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
-end, 7000)
+end)
 vim.defer_fn(function()
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(w)
@@ -235,16 +247,26 @@ require("targets").publish(vim.env.TARGETS)
 vim.cmd("edit " .. vim.env.WORK .. "/a.go")
 vim.cmd("edit " .. vim.env.WORK .. "/b.go")
 require("kebab.cli").db("")
-vim.defer_fn(function()
+-- Not a fixed delay: db mode's setup is scheduled and tears down windows
+-- twice on the way, so a table opened too early is opened into a layout that
+-- is about to be rebuilt. @see targets.when
+require("targets").when(function()
+  local I = require("kebab.dbide")
+  return I.tree_win() ~= nil and require("kebab.db").connection("shop") ~= nil
+end, function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
-end, 7000)
+end)
 vim.defer_fn(function()
   local out = {}
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(w)
     local pos = vim.api.nvim_win_get_position(w)
-    out[#out + 1] = ("WIN row=%d col=%d ft=%s fixbuf=%s"):format(pos[1], pos[2],
-      vim.bo[b].filetype, tostring(vim.wo[w].winfixbuf))
+    -- the buffer's name as well as its filetype: a run that failed with
+    -- `ft=markdown` where the statement pane belongs left no way to tell
+    -- which file had ended up there
+    out[#out + 1] = ("WIN row=%d col=%d ft=%s fixbuf=%s name=%s"):format(pos[1], pos[2],
+      vim.bo[b].filetype, tostring(vim.wo[w].winfixbuf),
+      vim.fn.fnamemodify(vim.api.nvim_buf_get_name(b), ":t"))
   end
   out[#out + 1] = "COUNT " .. #vim.api.nvim_list_wins()
   vim.fn.writefile(out, vim.env.REPORT)
@@ -254,8 +276,6 @@ LUA
 cat > "$work/case.json" <<JSON
 { "nvim_args": ["-n", "-c", "luafile $work/tabchild.lua"],
   "actions": [ {"kind":"wait","seconds":17},
-               {"kind":"click_target","name":"tables","file":"$work/targets","count":2},
-               {"kind":"wait","seconds":4},
                {"kind":"click_target","name":"tab_a.go","file":"$work/targets"},
                {"kind":"wait","seconds":7} ],
   "report": "$work/report.txt", "idle": 2, "limit": 110 }
@@ -284,9 +304,15 @@ vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 package.path = vim.env.HERE .. "/?.lua;" .. package.path
 require("targets").publish(vim.env.TARGETS)
 require("kebab.cli").db("")
-vim.defer_fn(function()
+-- Not a fixed delay: db mode's setup is scheduled and tears down windows
+-- twice on the way, so a table opened too early is opened into a layout that
+-- is about to be rebuilt. @see targets.when
+require("targets").when(function()
+  local I = require("kebab.dbide")
+  return I.tree_win() ~= nil and require("kebab.db").connection("shop") ~= nil
+end, function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
-end, 7000)
+end)
 vim.defer_fn(function()
   local out = {}
   for _, w in ipairs(vim.api.nvim_list_wins()) do
@@ -336,9 +362,15 @@ package.path = vim.env.HERE .. "/?.lua;" .. package.path
 require("targets").publish(vim.env.TARGETS)
 vim.g.kebab_db_page_size = 1
 require("kebab.cli").db("")
-vim.defer_fn(function()
+-- Not a fixed delay: db mode's setup is scheduled and tears down windows
+-- twice on the way, so a table opened too early is opened into a layout that
+-- is about to be rebuilt. @see targets.when
+require("targets").when(function()
+  local I = require("kebab.dbide")
+  return I.tree_win() ~= nil and require("kebab.db").connection("shop") ~= nil
+end, function()
   require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
-end, 7000)
+end)
 vim.defer_fn(function()
   local out = {}
   for _, w in ipairs(vim.api.nvim_list_wins()) do
@@ -366,6 +398,83 @@ rm -f "$work/report.txt"
 WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "the rows pane shows a button bar"      "LINE2 -- \[ n"          "$work/report.txt"
 check "clicking [ n next ] turns the page"    "LINE1.*page 2"           "$work/report.txt"
+
+# --- a project made entirely through the UI, no code -----------------------
+#
+# Asked for directly: "did you try to create projects from scratch? to test
+# built in wizards (such as spring boot) not asking via its code but via some
+# UX elements or shortcuts".
+#
+# The headless suite calls project.create() with its answers as data, and
+# scripts vim.ui.select/input for the wizard -- which exercises the wizard's
+# logic but never the picker a user actually types into. This case touches
+# nothing but the mouse and the keyboard: right-click, Project, New Project...,
+# then type into the real pickers, and then look on disk for a Spring Boot
+# project that nobody asked for in Lua.
+mkdir -p "$work/projects"
+cat > "$work/wizchild.lua" <<'LUA'
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
+-- The wizard offers the first configured project root. Pointing it at the
+-- sandbox is what keeps a test run out of the real ~/Projects.
+vim.g.kebab_project_roots = { vim.env.WORK .. "/projects" }
+vim.defer_fn(function()
+  local dest = vim.env.WORK .. "/projects/sample-app"
+  local out = {}
+  for _, rel in ipairs({ "pom.xml", "mvnw", "src/main/java" }) do
+    out[#out + 1] = ("FILE %s %s"):format(rel, vim.uv.fs_stat(dest .. "/" .. rel) and "yes" or "no")
+  end
+  local pom = ""
+  if vim.fn.filereadable(dest .. "/pom.xml") == 1 then
+    pom = table.concat(vim.fn.readfile(dest .. "/pom.xml"), " ")
+  end
+  out[#out + 1] = "POM " .. (pom:find("spring%-boot%-starter%-parent") and "spring-boot-parent" or "none")
+  out[#out + 1] = "ARTIFACT " .. (pom:find("<artifactId>sample%-app</artifactId>") and "sample-app" or "?")
+  out[#out + 1] = "STARTER " .. (pom:find("spring%-boot%-starter%-web") and "web" or "none")
+  local java = vim.fn.globpath(dest, "**/*.java", false, true)
+  out[#out + 1] = ("JAVA %d %s"):format(#java, vim.fn.fnamemodify(java[1] or "", ":t"))
+  out[#out + 1] = "CWD " .. vim.fn.getcwd()
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(b)
+    if name:find("sample%-app") then
+      out[#out + 1] = "BUF " .. name
+    end
+  end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 95000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/wizchild.lua"],
+  "actions": [ {"kind":"wait","seconds":12},
+               {"kind":"click_target","name":"editor_area","file":"$work/targets","button":2},
+               {"kind":"wait","seconds":4},
+               {"kind":"click_target","name":"menu_project","file":"$work/targets"},
+               {"kind":"wait","seconds":3},
+               {"kind":"click_target","name":"menu_new_project","file":"$work/targets"},
+               {"kind":"wait","seconds":4},
+               {"kind":"keys","text":"Spring"},
+               {"kind":"wait","seconds":3},
+               {"kind":"keys","text":"\\r"},
+               {"kind":"wait","seconds":3},
+               {"kind":"keys","text":"sample-app\\r"},
+               {"kind":"wait","seconds":3},
+               {"kind":"keys","text":"\\r"},
+               {"kind":"wait","seconds":3},
+               {"kind":"keys","text":"\\r"},
+               {"kind":"wait","seconds":2},
+               {"kind":"keys","text":"\\r"},
+               {"kind":"wait","seconds":30} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 170 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" HERE="$here" TARGETS="$work/targets" REPORT_AFTER=95000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "the wizard, driven by mouse and keyboard, writes a pom" "FILE pom.xml yes"        "$work/report.txt"
+check "it is a Spring Boot project"                            "POM spring-boot-parent"  "$work/report.txt"
+check "named after what was typed"                             "ARTIFACT sample-app"     "$work/report.txt"
+check "with the dependency the wizard offered"                 "STARTER web"             "$work/report.txt"
+check "and a Java source file in it"                           "JAVA [1-9]"              "$work/report.txt"
+check "the editor moved into the new project"                  "CWD .*projects/sample-app" "$work/report.txt"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

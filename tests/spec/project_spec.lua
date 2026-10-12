@@ -563,6 +563,13 @@ H.describe("project create", function()
     if vim.fn.executable("python3") == 0 then
       H.skip("python3 is not on PATH")
     end
+    -- Debian and Ubuntu ship python3 without ensurepip (it is in
+    -- python3-venv), so `python3 -m venv` fails with "ensurepip is not
+    -- available". The scaffold is right; the machine is incomplete.
+    vim.fn.system({ "python3", "-c", "import ensurepip" })
+    if vim.v.shell_error ~= 0 then
+      H.skip("python3 has no ensurepip (install python3-venv)")
+    end
     local dest = H.tmpdir("python-type") .. "/pyproj"
     local result
     H.capture_notify(function()
@@ -577,6 +584,50 @@ H.describe("project create", function()
     H.matches("%.venv/", H.read(dest .. "/.gitignore"))
     H.ok(H.exists(dest .. "/.git"), "should be a git repository")
     H.ok(H.exists(dest .. "/.venv"), ".venv should have been created")
+  end)
+end)
+
+H.describe("where a new project is offered", function()
+  H.it("is the first configured root, not a hardcoded directory", function()
+    local saved = vim.g.kebab_project_roots
+    local env = vim.env.KEBAB_PROJECT_ROOTS
+    vim.env.KEBAB_PROJECT_ROOTS = nil
+    vim.g.kebab_project_roots = { "/tmp/kebab-root-a", "/tmp/kebab-root-b" }
+    H.eq("/tmp/kebab-root-a", project.default_parent())
+    vim.g.kebab_project_roots = nil
+    H.matches("/Projects$", project.default_parent(), "with nothing configured, ~/Projects")
+    vim.g.kebab_project_roots = saved
+    vim.env.KEBAB_PROJECT_ROOTS = env
+  end)
+
+  H.it("expands a root written with a tilde", function()
+    local saved = vim.g.kebab_project_roots
+    local env = vim.env.KEBAB_PROJECT_ROOTS
+    vim.env.KEBAB_PROJECT_ROOTS = nil
+    vim.g.kebab_project_roots = { "~/some-where" }
+    H.eq(vim.env.HOME .. "/some-where", project.default_parent())
+    vim.g.kebab_project_roots = saved
+    vim.env.KEBAB_PROJECT_ROOTS = env
+  end)
+
+  H.it("is what the wizard puts in the Location box", function()
+    local saved = vim.g.kebab_project_roots
+    local env = vim.env.KEBAB_PROJECT_ROOTS
+    vim.env.KEBAB_PROJECT_ROOTS = nil
+    local parent = H.tmpdir("offered")
+    vim.g.kebab_project_roots = { parent }
+    local ui = H.with_ui({ "Empty (git + README)", "thing", H.CANCEL }, function()
+      project.new_project()
+    end)
+    vim.g.kebab_project_roots = saved
+    vim.env.KEBAB_PROJECT_ROOTS = env
+    local shown = nil
+    for _, ask in ipairs(ui.log) do
+      if ask.prompt and ask.prompt:find("Location") then
+        shown = ask.default
+      end
+    end
+    H.eq(parent .. "/thing", shown, "the Location box is prefilled from the root")
   end)
 end)
 

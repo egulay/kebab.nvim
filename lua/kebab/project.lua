@@ -482,16 +482,28 @@ local function pick_type(cb)
   end)
 end
 
+---Where a new project is offered by default: the first configured project
+---root, which is also where the switcher looks for them. It used to be a
+---hardcoded `~/Projects`, so a machine that keeps work elsewhere was offered a
+---directory it does not use -- and a test driving the real wizard had no way
+---to keep it out of the user's own home.
+---@return string
+function M.default_parent()
+  local first = M.roots()[1]
+  if type(first) ~= "string" or first == "" then
+    return require("kebab.path").expand("~/Projects")
+  end
+  return require("kebab.path").expand(first)
+end
+
 -- Full wizard: type -> name -> location -> the type's own questions.
 function M.new_project()
   pick_type(function(type_def)
     vim.ui.input({ prompt = "Project name: " }, function(name)
       if not name or name == "" then return end
-      -- ~/Projects is where this user keeps new work; note the capital P.
-      local default_parent = vim.fn.expand("~/Projects")
       vim.ui.input({
         prompt = "Location: ",
-        default = default_parent .. "/" .. name,
+        default = M.default_parent() .. "/" .. name,
         completion = "dir",
       }, function(dest)
         if not dest or dest == "" then return end

@@ -111,6 +111,24 @@ function M.collect()
     end
   end
 
+  -- The middle of the ordinary editing window: where a user right-clicks when
+  -- they want the editor menu and there is no file open yet. Resolved from the
+  -- live layout rather than hardcoded, because the dashboard, a file and a
+  -- three-pane database layout all put it somewhere different.
+  local main = window(function(b)
+    local ft = vim.bo[b].filetype
+    return ft ~= "neo-tree" and ft ~= "dbui" and not vim.b[b].kebab_db_output
+  end)
+  if main and vim.api.nvim_win_get_config(main).relative == "" then
+    local height = vim.api.nvim_win_get_height(main)
+    local width = vim.api.nvim_win_get_width(main)
+    local pos = vim.api.nvim_win_get_position(main)
+    out.editor_area = {
+      row = pos[1] + math.max(1, math.floor(height / 2)),
+      col = pos[2] + math.max(1, math.floor(width / 2)),
+    }
+  end
+
   -- a node in the file tree, for the right-click menu there
   local filetree = window(function(b)
     return vim.bo[b].filetype == "neo-tree"
@@ -192,13 +210,56 @@ function M.collect()
   return out
 end
 
+---Run `fn` once `want()` is true, instead of after a fixed delay.
+---
+---Two cases called `dbide.open_table` from a `defer_fn(7000)`, which assumes
+---the editor has finished booting, loading lazy and opening db mode inside
+---seven seconds. On a loaded machine -- a full suite run -- it has not, the
+---panes were created and then torn down by the mode setup that followed, and
+---the case failed 40 seconds later as "the editor never reported a target
+---called 'statement'", which reads like a broken pane rather than a race.
+---@param want fun(): boolean
+---@param fn function
+---@param budget_ms? integer how long to keep waiting (default 40s)
+function M.when(want, fn, budget_ms)
+  local waited, step = 0, 200
+  local budget = budget_ms or 40000
+  local timer = vim.uv.new_timer()
+  timer:start(step, step, vim.schedule_wrap(function()
+    waited = waited + step
+    local ok, ready = pcall(want)
+    if ok and ready then
+      timer:stop()
+      timer:close()
+      return fn()
+    end
+    if waited >= budget then
+      timer:stop()
+      timer:close()
+      -- Run it anyway: the case's own assertions are a better failure message
+      -- than silence, and this is a test harness.
+      return fn()
+    end
+  end))
+  return timer
+end
+
 ---Keep the file current while the editor runs.
 ---@param path string
 function M.publish(path)
   local timer = vim.uv.new_timer()
   timer:start(300, 300, vim.schedule_wrap(function()
     local lines = {}
-    for name, at in pairs(M.collect()) do
+    -- One failing section must not take every target with it: an error here
+    -- used to leave the file empty, and the case then failed as "the editor
+    -- never reported a target called 'statement'" -- which reads like a
+    -- missing pane rather than a broken collector.
+    local ok, found = pcall(M.collect)
+    if not ok then
+      lines[#lines + 1] = "ERROR 0 0 " .. tostring(found):gsub("%s+", " ")
+      found = {}
+    end
+    for name, at in pairs(found) do
       lines[#lines + 1] = ("%s %d %d"):format(name, at.row, at.col)
     end
     table.sort(lines)

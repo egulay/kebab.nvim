@@ -94,4 +94,12 @@ if __name__ == "__main__":
         elif a["kind"] == "keys":
             acts.append(a["text"])
     raw = run(spec["nvim_args"], acts, spec["report"], idle=spec.get("idle", 8), limit=spec.get("limit", 120))
+    # Everything the terminal was sent, if asked for. A case that fails
+    # otherwise leaves nothing to look at: the report is missing precisely
+    # because the editor never got where it was supposed to, and the screen is
+    # the only evidence of where it actually went.
+    keep = os.environ.get("KEBAB_PTY_RAW")
+    if keep:
+        with open(keep, "wb") as fh:
+            fh.write(bytes(raw))
     sys.stdout.write("--- report exists: %s\n" % os.path.exists(spec["report"]))
