@@ -104,6 +104,34 @@ H.describe("no private names in the repository", function()
     H.eq({}, hits, ("%d private name(s) in the tree (KEBAB_PRIVATE_SHOW=1 to see which)"):format(#hits))
   end)
 
+  H.it("has none of them anywhere in history", function()
+    -- The blind spot that let the second leak through: the tree and the
+    -- messages were both clean while every *previous* version of those files
+    -- still held the names, one `git log -p` away. A rewrite that fixes the
+    -- tip and not the history fixes nothing.
+    local list, path = terms()
+    if not list then
+      H.skip("no private-names list at " .. path)
+    end
+    local res = vim.system({ "git", "-C", root, "log", "--all", "-p", "--unified=0" }, { text = true })
+      :wait(300000)
+    H.eq(0, res.code, "git log -p should work")
+    local hits = {}
+    for _, term in ipairs(list) do
+      -- lower-casing the whole history once per term is wasteful; lower-case
+      -- it once and search each term in it
+      hits[term] = nil
+    end
+    local history = (res.stdout or ""):lower()
+    local found = {}
+    for _, term in ipairs(list) do
+      if history:find(term, 1, true) then
+        found[#found + 1] = redact(term)
+      end
+    end
+    H.eq({}, found, ("%d private name(s) in history (KEBAB_PRIVATE_SHOW=1 to see which)"):format(#found))
+  end)
+
   H.it("has none of them in any commit message", function()
     -- A message is as public as a file, and this is where the last leak
     -- survived the scrub of the tree.
