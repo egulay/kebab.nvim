@@ -105,14 +105,23 @@ a formatter -- which on reflection is the feature rather than a flaw.
   by decision, not omission. Completion covers tables, `table.column`, aliases
   and types; it does not know about functions, CTEs or subquery scopes.
 
-  ~~SQL Server and Oracle are written and never executed.~~ Done:
-  `tests/db/servers.sh` starts both in containers and drives this layer
-  against them -- 20 checks each, from the driver jar to the warm process. It
-  found two bugs that SQLite and PostgreSQL could not show: the tree listing
-  the server's own catalog (589 `sys` tables on SQL Server, 2049 on Oracle)
-  and a structure panel that came back empty for a table name typed in the
-  wrong case. Still never run against a server: MySQL, MariaDB, H2, DuckDB,
-  ClickHouse.
+  ~~SQL Server and Oracle are written and never executed.~~ Done, and then
+  the rest of them: `tests/db/servers.sh` covers **eight of the nine
+  registered drivers** -- H2, DuckDB and SQLite need no server at all, and
+  PostgreSQL, MySQL, MariaDB, SQL Server and Oracle run in containers. 22
+  checks each, from the driver jar to the warm process.
+
+  Three bugs that SQLite and PostgreSQL could not show, one per round:
+  the tree listing the server's own catalog (589 `sys` tables on SQL Server,
+  2049 on Oracle), a structure panel that came back empty for a table name
+  typed in the wrong case, and -- found only once MySQL was added -- 100 `sys`
+  views returned *unqualified*, because MySQL keeps its internals in a catalog
+  rather than a schema and the filter was looking at the wrong field.
+
+  **ClickHouse is the one left**: registered and dialect-complete, never run
+  against a server, and labelled that way in the README. Deliberate: its SQL
+  is unusual enough that the fixture would be testing itself, and nothing in
+  these stacks uses it.
 - ~~**Startup time has never been measured.**~~ Measured: **21.8 ms** median
   with the full layer against **3.4 ms** for bare `nvim -u NONE`, so the layer
   costs about 18 ms despite 80-odd plugins -- lazy loading is doing its job.

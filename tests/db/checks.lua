@@ -148,6 +148,35 @@ do
     bad("the tree is not flooded with the catalog",
       ("%d system tables, e.g. %s"):format(#offenders, offenders[1]))
   end
+
+  -- A prefix check is not enough, and MySQL is why: it keeps its internals in
+  -- a *catalog* rather than a schema, so 100 `sys` views came back with no
+  -- qualifier at all -- `host_summary`, `innodb_lock_waits` -- and a check
+  -- looking for "sys." passed while the tree was unusable. The invariant a
+  -- user actually has is "my tables are findable without scrolling past the
+  -- server's internals", so the count is what gets asserted.
+  local LIMIT = 20
+  if #tables <= LIMIT then
+    ok(("the list is the size of a schema, not of a server (%d tables)"):format(#tables))
+  else
+    bad("the list is the size of a schema, not of a server",
+      ("%d tables for a fixture of 2; first few: %s"):format(#tables,
+        table.concat(vim.list_slice(tables, 1, 6), ", ")))
+  end
+
+  -- and the fixture itself has to be in there, or the filter has gone too far
+  local found = false
+  for _, name in ipairs(tables) do
+    if name:lower():find("kebab_items") then
+      found = true
+    end
+  end
+  if found then
+    ok("the tables this fixture created are in the list")
+  else
+    bad("the tables this fixture created are in the list",
+      "kebab_items is missing: the filter removed the user's own schema")
+  end
 end
 
 do

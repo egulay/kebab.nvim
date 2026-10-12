@@ -256,15 +256,42 @@ public final class KebabJdbc {
     System.out.println(md.getDatabaseProductName() + " " + md.getDatabaseProductVersion());
   }
 
+  /**
+   * The catalog to ask about: the one the connection is pointed at.
+   *
+   * <p>Why this is not null. On MySQL and MariaDB the *catalog* is the
+   * database, and `getTables(null, ...)` therefore means every database on the
+   * server: a fresh MySQL 8.4 answered with 100 tables for a fixture of two,
+   * the other 100 being the `sys` schema's views -- and they arrive with
+   * TABLE_SCHEM null, so they are reported unqualified and are
+   * indistinguishable from the user's own in the tree. The schema filter could
+   * not catch them either, since it was looking at the wrong field.
+   *
+   * <p>On PostgreSQL and SQL Server the catalog is also the database, and the
+   * connection's own is what the user means. On Oracle and SQLite there are no
+   * catalogs and this is null, which is what those drivers want anyway.
+   */
+  private static String scopeCatalog(Connection conn) {
+    try {
+      String catalog = conn.getCatalog();
+      return (catalog == null || catalog.isEmpty()) ? null : catalog;
+    } catch (SQLException e) {
+      return null;
+    }
+  }
+
   private static void tables(Connection conn) throws SQLException {
     DatabaseMetaData md = conn.getMetaData();
     boolean all = "1".equals(System.getenv("KEBAB_DB_ALL_SCHEMAS"));
     Set<String> system = systemSchemas(md);
-    try (ResultSet rs = md.getTables(null, null, "%", new String[] {"TABLE", "VIEW"})) {
+    try (ResultSet rs =
+        md.getTables(scopeCatalog(conn), null, "%", new String[] {"TABLE", "VIEW"})) {
       while (rs.next()) {
         String schema = rs.getString("TABLE_SCHEM");
         String name = rs.getString("TABLE_NAME");
-        if (!all && isSystemSchema(system, schema)) continue;
+        if (!all && (isSystemSchema(system, schema) || isSystemSchema(system, safe(rs, "TABLE_CAT")))) {
+          continue;
+        }
         System.out.println(qualify(schema, name));
       }
     }
@@ -306,6 +333,8 @@ public final class KebabJdbc {
     } else if (product.contains("microsoft sql server")) {
       out.addAll(Arrays.asList("sys", "information_schema"));
     } else if (product.contains("mysql") || product.contains("mariadb")) {
+      // These are *catalogs* on MySQL, not schemas, which is why the filter
+      // has to test TABLE_CAT as well. @see scopeCatalog
       out.addAll(Arrays.asList("information_schema", "mysql", "performance_schema", "sys"));
     } else if (product.contains("postgresql")) {
       out.addAll(Arrays.asList("pg_catalog", "information_schema", "pg_toast"));
@@ -572,10 +601,13 @@ public final class KebabJdbc {
     boolean all = "1".equals(System.getenv("KEBAB_DB_ALL_SCHEMAS"));
     Set<String> system = systemSchemas(md);
     List<String> names = new ArrayList<>();
-    try (ResultSet rs = md.getTables(null, null, "%", new String[] {"TABLE", "VIEW"})) {
+    try (ResultSet rs =
+        md.getTables(scopeCatalog(conn), null, "%", new String[] {"TABLE", "VIEW"})) {
       while (rs.next()) {
         String schema = rs.getString("TABLE_SCHEM");
-        if (!all && isSystemSchema(system, schema)) continue;
+        if (!all && (isSystemSchema(system, schema) || isSystemSchema(system, safe(rs, "TABLE_CAT")))) {
+          continue;
+        }
         names.add(qualify(schema, rs.getString("TABLE_NAME")));
       }
     }

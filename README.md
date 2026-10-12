@@ -286,7 +286,14 @@ costs about 180ms and every one after it about 0.2ms. `:IdeDbStatus` reports
 what is running; `:IdeDbDisconnect` closes them.
 
 PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle, H2, DuckDB and
-ClickHouse are registered. Add your own:
+ClickHouse are registered. Eight of the nine are **checked against a real
+server** by `tests/db/servers.sh` — 22 checks each, from the driver download to
+paging, `EXPLAIN`, the structure view and the warm process. **ClickHouse is the
+exception: registered, dialect-complete, and never run.** Its SQL is unusual
+enough that a fixture would be testing itself as much as the layer, so it is
+labelled rather than claimed.
+
+Add your own:
 
 ```lua
 vim.g.kebab_jdbc_drivers = {
