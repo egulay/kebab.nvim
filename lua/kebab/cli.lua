@@ -134,6 +134,21 @@ end
 -- explorer" was "start Neovim, then press a key", which is not how you start
 -- a dedicated database IDE.
 
+---Shut the file tree, and stop the always-on explorer from reopening it.
+---
+---`kebab db` is a database session: the left column belongs to the data source
+---tree. Without this both are open and the statement and rows panes end up 20
+---columns wide.
+function M.close_file_explorer()
+  vim.g.ide_explorer_opened = true
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(w)
+    if vim.bo[buf].filetype == "neo-tree" and #vim.api.nvim_list_wins() > 1 then
+      pcall(vim.api.nvim_win_close, w, true)
+    end
+  end
+end
+
 ---Saved connections whose name matches `query`, exact match winning outright.
 ---Same shape as M.resolve for projects, and for the same reason: an ambiguous
 ---name should offer a choice, not pick one.
@@ -167,6 +182,12 @@ function M.db(name)
   if #list == 0 then
     return vim.notify("No database connections yet — <leader>Da or :IdeDbAdd adds one", vim.log.levels.WARN)
   end
+
+  -- The file tree is not wanted here: a database IDE's left column is the
+  -- data source tree, and with both open the statement and rows panes were
+  -- squeezed into 20 columns. Measured in a real terminal, which is the only
+  -- place window geometry can be measured at all.
+  M.close_file_explorer()
 
   if name == nil or name == "" then
     -- The explorer belongs to a lazy spec, so it has to be loaded before its

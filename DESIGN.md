@@ -279,6 +279,27 @@ Refusing an unreadable env file is deliberate: starting anyway opens the IDE
 with every connection unable to authenticate, which reads as a broken database
 rather than a typo.
 
+### `dbide.lua` -- the three panes
+
+dadbod-ui draws the tree and stops there. It has no mouse support of any kind,
+and its own action on a table expands it into a "List" child you then have to
+click, with the result landing in whatever window dadbod chooses. Double
+clicking a table and seeing its data -- the first thing anyone arriving from a
+graphical database IDE does -- did nothing at all.
+
+So the tree stays and this module owns opening a table: the statement in a pane
+top right, its rows under it, cursor left on the statement so the next thing
+you type edits the query. `<leader>S` there runs the statement under the cursor
+and refreshes the rows pane; it is bound buffer-locally so it beats dadbod's
+own exec, which would open a second result window.
+
+Reading the tree does not parse dadbod-ui's drawing. The candidate on the
+clicked line is checked against the table list this layer already has for that
+connection, and the connection is the nearest name above it from kebab's own
+store -- so indentation, expand arrows and whichever glyphs the Nerd Font
+happens to have are all irrelevant, and "New query" or "Saved queries (0)"
+cannot be mistaken for a table.
+
 ## `cli.lua` + `bin/kebab`
 
 Opening and creating projects from the shell, so the IDE starts like `code .`

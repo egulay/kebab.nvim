@@ -61,6 +61,7 @@ lua/kebab/
 ├── runconfig.lua        .kebab/run.json, as an overseer template provider
 ├── jdbc.lua             JDBC drivers from Maven Central + the JVM runner
 ├── db.lua               connections, table browsing, SQL consoles
+├── dbide.lua            the three panes: tree | statement / rows
 ├── dbcomplete.lua       SQL completion from JDBC schema introspection
 ├── lsp.lua              semantic queries (diagnostics/definition/refs/symbols/hover)
 ├── agent.lua            their CLI contract: rendering, JSON, exit codes
@@ -93,7 +94,8 @@ tests/
 ├── run.sh               ./tests/run.sh [spec-name-filter]
 ├── run.lua              boots one Neovim, runs every spec
 ├── harness.lua          assertions, vim.ui stubs, scratch repos
-└── spec/*_spec.lua      one file per area
+├── spec/*_spec.lua      one file per area
+└── pty/run.sh           mouse tests; a real terminal, NOT in run.sh
 ```
 
 ## Rules learned the hard way
@@ -535,6 +537,24 @@ client attached, file contents reverted.
   would be too late. An unreadable env file is a hard error: starting anyway
   opens the IDE with every connection failing to authenticate, which reads as
   a broken database rather than a typo.
+- **A headless Neovim has no screen grid, so it cannot be clicked.**
+  `nvim_input_mouse()` is dropped and `feedkeys("<2-LeftMouse>")` does nothing,
+  both silently -- so a mouse test written headlessly passes by doing nothing.
+  "The double click works" was claimed twice on the strength of a registered
+  mapping, and the mapping was there and the click did nothing both times. Use
+  `tests/pty/run.sh`: a real editor under a pty (`#nvim_list_uis() == 1`) fed
+  the SGR mouse reports a terminal sends. It is not in `./tests/run.sh`
+  because each case boots an editor.
+- **dadbod-ui has no mouse support at all** -- `<CR>`, `o`, `A`, `H`, `J`, `K`,
+  `R`, `S`, `d`, `q`, `r` and nothing else -- and its action on a table
+  expands it into a "List" child rather than opening it. `plugins/sql.lua` maps
+  `<2-LeftMouse>` to `kebab.dbide.click`, which feeds `<LeftMouse>` first (that
+  is what moves the cursor to the clicked line) and then opens a table in the
+  three panes, falling through to `<Plug>(DBUI_SelectLine)` for anything else.
+- SQL consoles and statement panes are **real files**, so `vim.g.kebab_db_sql_dir`
+  exists and `tests/run.lua` pins it: a run left twenty `beta-*.sql` in the
+  user's own data directory, and one of them made the editor ask whether to
+  save it -- a prompt nothing can answer under `--headless`.
 - **dadbod strips a leading `jdbc:` from any url** (`substitute(url, '^jdbc:',
   '', '')` in its own `s:resolve`) and dispatches on what is left, because it
   accepts JDBC-shaped urls for its *native* adapters. So `b:db` and

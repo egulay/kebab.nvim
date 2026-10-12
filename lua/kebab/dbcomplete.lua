@@ -113,6 +113,19 @@ function M.schema(url)
 end
 
 ---Is the schema for this URL already loaded?
+---The table names the schema cache holds for `url`, in the order the driver
+---gave them. Empty when nothing is cached yet -- the caller decides whether a
+---round trip is worth it.
+---@param url string
+---@return string[]
+function M.table_names(url)
+  local hit = cache[url]
+  if not hit then
+    return {}
+  end
+  return vim.deepcopy(hit.order or {})
+end
+
 function M.loaded(url)
   local hit = cache[url]
   if hit == nil then

@@ -182,6 +182,22 @@ and query it.
 Connections are JDBC, and the driver is fetched from Maven Central the first
 time you use it.
 
+`kebab db` opens the three panes a database IDE opens with, and a **double
+click** on a table in the tree writes its select into the statement pane and
+its rows underneath — then `<leader>S` runs whatever you edit it into, and the
+rows pane refreshes:
+
+```
++-----------+--------------------------+
+| explorer  | select * from "customers"|
+|           +--------------------------+
+|           | id | full_name           |
++-----------+--------------------------+
+```
+
+The statement pane is a real file under `stdpath("data")`, not a scratch
+buffer, so the query you edited is still there tomorrow.
+
 | | |
 |---|---|
 | `<leader>DD` | Database explorer |

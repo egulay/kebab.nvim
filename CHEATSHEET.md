@@ -308,6 +308,8 @@ Drivers come from Maven Central on first use; no native client needed.
 | Was | Here | |
 |---|---|---|
 | Open the database IDE | `kebab db` | from a shell: explorer open, connections on the left |
+| Open a table | **double click it** | the select top right, its rows under it |
+| Run what you edited | `<leader>S` or `<C-CR>` | in the statement pane; rows refresh below |
 | ...on one connection | `kebab db <name>` | straight into a SQL console |
 | Database tool window | `<leader>DD` | Explorer |
 | New data source | `<leader>Da` | Add a connection, then test it |

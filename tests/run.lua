@@ -14,6 +14,12 @@ _G.KEBAB_TEST = { root = root, H = H }
 -- perfectly reasonable. Specs that want it opt in explicitly.
 vim.g.kebab_follow_autostart = false
 
+-- SQL consoles and statement panes are real files. Twenty of them turned up in
+-- the user's own ~/.local/share/nvim/kebab/sql after a run, and one of them
+-- made the editor ask whether to save it -- a prompt nothing can answer under
+-- --headless. Every spec writes them here instead.
+vim.g.kebab_db_sql_dir = vim.fn.tempname() .. "-kebab-sql"
+
 -- Never run from the project directory: a spec that writes a file must not be
 -- able to land in the repo.
 local sandbox = H.tmpdir("cwd")

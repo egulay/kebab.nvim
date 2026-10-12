@@ -57,11 +57,20 @@ return {
         group = vim.api.nvim_create_augroup("kebab_dbui_mouse", { clear = true }),
         pattern = "dbui",
         callback = function(ev)
-          vim.keymap.set("n", "<2-LeftMouse>", "<LeftMouse><Plug>(DBUI_SelectLine)", {
-            buffer = ev.buf,
-            remap = true,
-            desc = "Open the node under the pointer",
-          })
+          -- <LeftMouse> first so the cursor lands on the clicked line, then
+          -- kebab's own handler: a table opens in the three-pane layout (the
+          -- statement top right, its rows under it), and anything else falls
+          -- through to dadbod-ui's own action. dadbod-ui on its own expands a
+          -- table into a "List" child you then have to click, and puts the
+          -- result wherever it likes.
+          vim.keymap.set("n", "<2-LeftMouse>", function()
+            vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true), "n", false)
+            -- after the click has been processed, so the cursor is on the
+            -- clicked line rather than wherever it was
+            vim.schedule(function()
+              require("kebab.dbide").click()
+            end)
+          end, { buffer = ev.buf, desc = "Open the node under the pointer" })
         end,
       })
     end,

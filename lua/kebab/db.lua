@@ -13,6 +13,17 @@ local M = {}
 
 local jdbc = require("kebab.jdbc")
 
+---Where SQL consoles and statement panes are kept.
+---
+---Overridable because the test suite must not write into the user's own data
+---directory -- a spec did, and the editor then asked whether to save it.
+function M.sql_dir()
+  local dir = vim.g.kebab_db_sql_dir and require("kebab.path").expand(vim.g.kebab_db_sql_dir)
+    or (vim.fn.stdpath("data") .. "/kebab/sql")
+  vim.fn.mkdir(dir, "p")
+  return dir
+end
+
 function M.store_path()
   return (vim.g.kebab_db_store and require("kebab.path").expand(vim.g.kebab_db_store))
     or (vim.fn.stdpath("data") .. "/kebab/connections.json")
@@ -599,8 +610,7 @@ end
 function M.console(connection)
   local with = connection and function(cb) return cb(connection) end or M.current
   with(function(c)
-    local dir = vim.fn.stdpath("data") .. "/kebab/sql"
-    vim.fn.mkdir(dir, "p")
+    local dir = M.sql_dir()
     -- The loop used to leave `path` pointing at the 1000th *existing* file
     -- when every candidate was taken, and then truncate it -- overwriting a
     -- saved console. A timestamp cannot collide, and nothing is written over.

@@ -333,12 +333,12 @@ H.describe("the explorer and the mouse", function()
       if m.lhs == "<2-LeftMouse>" then found = m end
     end
     H.ok(found, "a dbui buffer should answer a double click")
-    H.eq("<LeftMouse><Plug>(DBUI_SelectLine)", found.rhs)
-    -- The <LeftMouse> prefix moves the cursor to the clicked line first;
-    -- without it the action applies to wherever the cursor already was.
-    H.matches("^<LeftMouse>", found.rhs)
-    -- And it has to be remappable, or the <Plug> never fires.
-    H.eq(0, found.noremap, "a <Plug> rhs cannot be noremap")
+    -- A Lua callback, which feeds <LeftMouse> first (so the cursor lands on
+    -- the clicked line) and then hands over to kebab.dbide: a table opens in
+    -- the three-pane layout, anything else falls through to dadbod-ui's own
+    -- action. dbide_spec covers what it then does.
+    H.ok(found.callback, "it should dispatch to kebab's handler")
+    H.matches("pointer", found.desc or "")
   end)
 
   H.it("leaves other buffers alone", function()
