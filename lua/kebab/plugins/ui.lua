@@ -1,5 +1,14 @@
 -- The project tree behaves like a graphical IDE's project pane, and the
 -- parameter hints LazyVim leaves switched off are turned on.
+--
+-- `confirm` is on, which is what gives the "Save changes to ...?" dialog on
+-- the way out of an edited buffer, and a yes/no question instead of a refusal
+-- for anything else that would lose work. Without it `:q` on a modified
+-- buffer answers `E37: No write since last change`, which is a wall, not a
+-- question -- a graphical editor asks, and so should this. It applies to every
+-- buffer, code and SQL alike, since it is an editor option rather than
+-- anything this layer does per filetype.
+vim.o.confirm = true
 -- The always-on tree is registered from `init` below, which lazy.nvim runs
 -- during setup -- before Neovim reads the file arguments, so the first
 -- BufReadPost is not missed.

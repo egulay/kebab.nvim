@@ -312,4 +312,7 @@ menu.actions = {
   copy_relative_path = copy_path(":~:."),
 }
 
+-- As with the editor menu: declared canonically, shown as what you press.
+require("kebab.keys").humanise(menu)
+
 return menu

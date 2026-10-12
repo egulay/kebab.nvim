@@ -46,7 +46,16 @@ vim.defer_fn(function()
 end, tonumber(vim.env.REPORT_AFTER) or 30000)
 LUA
 
-check() { # name pattern file
+check() { # name pattern file           -- or: name -v file pattern (must NOT match)
+  local ok
+  if [ "$2" = "-v" ]; then
+    grep -q "$4" "$3" 2>/dev/null && ok=1 || ok=0
+    if [ "$ok" -eq 0 ]; then
+      printf '  ok   %s\n' "$1"; pass=$((pass + 1)); return
+    fi
+    printf '  FAIL %s\n' "$1"; printf '       did not want /%s/ in:\n' "$4"
+    sed 's/^/       | /' "$3"; fail=$((fail + 1)); return
+  fi
   if grep -q "$2" "$3" 2>/dev/null; then
     printf '  ok   %s\n' "$1"; pass=$((pass + 1))
   else
@@ -181,6 +190,56 @@ JSON
 rm -f "$work/report.txt"
 WORK="$work" REPORT_AFTER=34000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
 check "clicking a menu row runs that entry" "clicked-the-menu" "$work/report.txt"
+
+# --- the layout survives a session that already had windows ----------------
+#
+# Reported as "UI is broken completely when I clicked to the tabs on the top on
+# db mode", after creating a new query. With two files already open the layout
+# came out as five windows: the data source tree gone, the statement pane open
+# twice, the file tree back, and a leftover code window five columns wide --
+# then clicking a tab loaded a Go file into the tree's window. None of it is
+# visible without a real terminal: window geometry needs a UI, and the tab bar
+# hides itself until two buffers are listed.
+printf 'package main\nfunc main() {}\n' > "$work/a.go"
+printf 'package main\nfunc other() {}\n' > "$work/b.go"
+cat > "$work/tabchild.lua" <<'LUA'
+vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
+vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+vim.cmd("edit " .. vim.env.WORK .. "/a.go")
+vim.cmd("edit " .. vim.env.WORK .. "/b.go")
+require("kebab.cli").db("")
+vim.defer_fn(function()
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+end, 7000)
+vim.defer_fn(function()
+  local out = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    local pos = vim.api.nvim_win_get_position(w)
+    out[#out + 1] = ("WIN row=%d col=%d ft=%s fixbuf=%s"):format(pos[1], pos[2],
+      vim.bo[b].filetype, tostring(vim.wo[w].winfixbuf))
+  end
+  out[#out + 1] = "COUNT " .. #vim.api.nvim_list_wins()
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 30000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/tabchild.lua"],
+  "actions": [ {"kind":"wait","seconds":17},
+               {"kind":"click","col":8,"row":7,"count":2},
+               {"kind":"wait","seconds":4},
+               {"kind":"click","col":12,"row":1,"button":0,"count":1},
+               {"kind":"wait","seconds":7} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 110 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "db mode leaves exactly three windows"   "COUNT 3"              "$work/report.txt"
+check "the file tree is not one of them"       -v                     "$work/report.txt" "neo-tree"
+check "the explorer window is pinned"          "ft=dbui fixbuf=true"  "$work/report.txt"
+check "the rows window is pinned"              "ft=dbout fixbuf=true" "$work/report.txt"
+check "the statement window is not pinned"     "ft=sql fixbuf=false"  "$work/report.txt"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

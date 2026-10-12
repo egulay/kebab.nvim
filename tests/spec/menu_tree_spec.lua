@@ -238,7 +238,10 @@ H.describe("tree mappings", function()
     local missing = {}
     local checked = 0
     for _, leaf in ipairs(flat.leaves) do
-      local rtxt = leaf.entry.rtxt
+      -- `keyspec` is the canonical form the menu declared; `rtxt` is what goes
+      -- on screen ("g y" rather than "gy"), which cannot be matched against a
+      -- mapping. kebab.keys.humanise keeps both for exactly this reason.
+      local rtxt = leaf.entry.keyspec or leaf.entry.rtxt
       -- <leader>… entries are global keymaps, covered by keymaps_spec
       if rtxt and rtxt ~= "" and not rtxt:match("^<leader>") then
         checked = checked + 1

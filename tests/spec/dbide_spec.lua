@@ -270,8 +270,12 @@ H.describe("paging the rows", function()
     H.matches("page 1", I.pager_line(c, { offset = 0, shown = 100, more = true }))
     H.matches("rows 101%-150 of 150", I.pager_line(c, { offset = 100, shown = 50, more = false }))
     H.matches("page 2", I.pager_line(c, { offset = 100, shown = 50, more = false }))
-    H.matches("%]p next", I.pager_line(c, { offset = 0, shown = 1, more = false }),
-      "the keys belong on screen; nobody reads a cheatsheet for a pager")
+    -- Spelled out as keystrokes, not as "]p": the line is on screen.
+    local line = I.pager_line(c, { offset = 0, shown = 1, more = false })
+    H.matches("next: %] p", line, "the keys belong on screen, as keys: " .. line)
+    H.matches("back: %[ p", line)
+    H.matches("re%-run: R", line)
+    H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
   end)
 
   H.it("shows one page, not the whole table", function()

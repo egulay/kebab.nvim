@@ -58,16 +58,38 @@ function M.tree_win()
   return nil
 end
 
----A window that is neither the tree nor one of ours: where the editor goes.
+---A window the statement pane may take over: not the tree, not the rows pane,
+---and not one pinned against having its buffer replaced.
 local function plain_win()
   local tree = M.tree_win()
   for _, w in ipairs(vim.api.nvim_list_wins()) do
     local b = vim.api.nvim_win_get_buf(w)
-    if w ~= tree and not vim.b[b][EDITOR_VAR] and not vim.b[b][OUTPUT_VAR] then
+    local pinned = vim.wo[w].winfixbuf
+    if w ~= tree and not pinned and not vim.b[b][EDITOR_VAR] and not vim.b[b][OUTPUT_VAR] then
       return w
     end
   end
   return nil
+end
+
+---Stop anything replacing this window's buffer.
+---
+---Clicking a tab in the bufferline loads that buffer into the focused window.
+---With the data source tree or the rows grid focused that scrambled the
+---layout -- the tree window showing a Go file, and no way back. `winfixbuf`
+---makes the attempt fail loudly instead.
+---@param win integer
+local function pin(win)
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(function()
+      vim.wo[win].winfixbuf = true
+    end)
+  end
+end
+
+---Pin the explorer, whenever it is open.
+function M.pin_tree()
+  pin(M.tree_win())
 end
 
 -- ------------------------------------------------------------------ buffers
@@ -81,27 +103,20 @@ function M.editor_path(c)
 end
 
 ---Put the statement pane on screen and return its window.
+---
+---Deterministic on purpose. The first version focused "some window that is not
+---the tree" and ran `:edit` in it, which fails in a window holding a special
+---buffer -- and the failure is silent, so the code carried on and applied the
+---statement pane's settings to *neo-tree's* buffer: a window showing the file
+---tree with filetype sql, the data source tree gone, and the statement open
+---twice. Measured in a real terminal with two files already open.
+---
+---So: reuse our own window if it is still there, otherwise open the file with
+---the window command itself (`vsplit <path>`, not `vsplit` then `edit`), and
+---then *check* that the window really holds that file.
 ---@param c kebab.DbConnection
+---@return integer|nil win, string|nil err
 function M.editor(c)
-  local win = window_with(EDITOR_VAR)
-  if win and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_set_current_win(win)
-  else
-    local host = plain_win()
-    if host then
-      vim.api.nvim_set_current_win(host)
-    else
-      -- only the tree is open: make room to its right
-      local tree = M.tree_win()
-      if tree then
-        vim.api.nvim_set_current_win(tree)
-        vim.cmd("rightbelow vsplit")
-      else
-        vim.cmd("vsplit")
-      end
-    end
-  end
-
   local path = M.editor_path(c)
   if vim.fn.filereadable(path) == 0 then
     local wrote, werr = require("kebab.fs").write_lines(path, { ("-- %s"):format(c.name), "" })
@@ -109,13 +124,58 @@ function M.editor(c)
       return nil, werr
     end
   end
-  vim.cmd("edit " .. vim.fn.fnameescape(path))
-  local buf = vim.api.nvim_get_current_buf()
+  local esc = vim.fn.fnameescape(path)
+  local want = vim.fn.fnamemodify(path, ":p")
+
+  local function holds_it(win)
+    return win
+      and vim.api.nvim_win_is_valid(win)
+      and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)) == want
+  end
+
+  -- already open: reuse it
+  local win = window_with(EDITOR_VAR)
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_set_current_win(win)
+    if not holds_it(win) then
+      pcall(vim.cmd, "edit " .. esc)
+    end
+  else
+    -- a window we may take over, and only if it holds an ordinary file
+    local host = plain_win()
+    if host and vim.bo[vim.api.nvim_win_get_buf(host)].buftype ~= "" then
+      host = nil
+    end
+    if host then
+      vim.api.nvim_set_current_win(host)
+      pcall(vim.cmd, "edit " .. esc)
+    else
+      local tree = M.tree_win()
+      if tree and vim.api.nvim_win_is_valid(tree) then
+        vim.api.nvim_set_current_win(tree)
+        pcall(vim.cmd, "rightbelow vsplit " .. esc)
+      else
+        pcall(vim.cmd, "vsplit " .. esc)
+      end
+    end
+  end
+
+  -- and verify, because every branch above can fail silently
+  win = vim.api.nvim_get_current_win()
+  if not holds_it(win) then
+    local ok = pcall(vim.cmd, "botright vsplit " .. esc)
+    win = vim.api.nvim_get_current_win()
+    if not ok or not holds_it(win) then
+      return nil, "could not open " .. path
+    end
+  end
+
+  local buf = vim.api.nvim_win_get_buf(win)
   vim.b[buf][EDITOR_VAR] = true
   vim.bo[buf].filetype = "sql"
   db.attach(c, buf)
   M.bind_editor(buf)
-  return vim.api.nvim_get_current_win()
+  return win
 end
 
 ---The rows pane for a connection, below the statement.
@@ -148,6 +208,7 @@ function M.output(c)
   M.bind_pager(buf)
   local out = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(out, buf)
+  pin(out)
   local total = vim.api.nvim_win_get_height(editor) + vim.api.nvim_win_get_height(out)
   vim.api.nvim_win_set_height(out, math.max(3, math.floor(total * M.output_fraction())))
   return out
@@ -221,8 +282,12 @@ function M.pager_line(c, info)
   local first = info.shown > 0 and info.offset + 1 or info.offset
   local last = info.offset + info.shown
   local total = info.more and "more" or tostring(last)
-  return ("-- %s · rows %d-%d of %s · page %d · ]p next  [p prev  [P first  R refresh")
-    :format(c.name, first, last, total, page)
+  local K = require("kebab.keys")
+  -- Spelled out, because this line is on screen and "]p" is not something
+  -- anyone reads as two keystrokes until they are told.
+  return ("-- %s · rows %d-%d of %s · page %d · next: %s · back: %s · first: %s · re-run: %s")
+    :format(c.name, first, last, total, page,
+      K.human("]p"), K.human("[p"), K.human("[P"), K.human("R"))
 end
 
 ---Run `sql` and show its first page.
@@ -359,6 +424,7 @@ end
 ---@param c kebab.DbConnection
 ---@return { tree: integer|nil, editor: integer|nil, output: integer|nil }
 function M.layout(c)
+  M.pin_tree()
   local editor = M.editor(c)
   local output = editor and M.output(c) or nil
   if editor and vim.api.nvim_win_is_valid(editor) then
@@ -371,7 +437,8 @@ end
 function M.run_current()
   local c = db.attached()
   if not c then
-    return vim.notify("This buffer has no connection (<leader>Dc attaches one)", vim.log.levels.WARN)
+    return vim.notify(("This buffer has no connection — press %s to attach one")
+      :format(require("kebab.keys").human("<leader>Dc")), vim.log.levels.WARN)
   end
   local saved = db.connection(c.name)
   local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
@@ -429,7 +496,8 @@ function M.run_all()
   local attached = db.attached()
   local c = attached and (db.connection(attached.name) or attached) or nil
   if not c then
-    return vim.notify("This buffer has no connection (<leader>Dc attaches one)", vim.log.levels.WARN)
+    return vim.notify(("This buffer has no connection — press %s to attach one")
+      :format(require("kebab.keys").human("<leader>Dc")), vim.log.levels.WARN)
   end
   local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
   if vim.trim(text) == "" then
@@ -529,6 +597,23 @@ function M.click()
   local c = db.connection(name)
   if not c then
     return fallback()
+  end
+
+  -- "New query" is dadbod-ui's own node, and its action opens a buffer in
+  -- whichever window dadbod-ui feels like using -- which is how a three-pane
+  -- layout ends up with the statement open twice and the tree gone. Give it
+  -- the statement pane instead, which is where a new query belongs.
+  local line = vim.trim(((lines[row] or ""):gsub("^[^%w_]*", "")))
+  if line == "New query" then
+    local layout = M.layout(c)
+    if layout.editor then
+      local buf = vim.api.nvim_win_get_buf(layout.editor)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { ("-- %s"):format(c.name), "", "" })
+      pcall(vim.api.nvim_win_set_cursor, layout.editor, { 2, 0 })
+      vim.api.nvim_set_current_win(layout.editor)
+      vim.cmd("startinsert")
+    end
+    return
   end
   -- The completion cache usually has the list already, which costs nothing.
   -- When it does not -- expanding a connection in the tree does not populate

@@ -94,7 +94,10 @@ local function walk(items, prefix)
       if e.items then
         walk(e.items, prefix .. e.name .. " › ")
       elseif e.rtxt then
-        rows[#rows + 1] = { label = prefix .. e.name, rtxt = e.rtxt }
+        -- `keyspec` is the canonical form -- "<leader>S" -- which is what can
+        -- be checked against a real mapping. `rtxt` is what goes on screen,
+        -- "Space S", and is checked separately below for jargon.
+        rows[#rows + 1] = { label = prefix .. e.name, rtxt = e.keyspec or e.rtxt, shown = e.rtxt }
       end
     end
   end
@@ -123,6 +126,19 @@ H.describe("menu shortcuts", function()
     end
     -- "Open in Terminal" in the tree menu has none; the editor menu should.
     H.eq({}, missing, "entries without a shortcut hint")
+  end)
+
+  H.it("shows what a person presses, not <leader>", function()
+    -- Asked for directly: "do not use leader or any other stuff which you only
+    -- understand". The menu is on screen; <leader>DD is documentation jargon.
+    local jargon = {}
+    for _, row in ipairs(rows) do
+      local shown = row.shown or ""
+      if shown:find("<") or shown:lower():find("leader") then
+        jargon[#jargon + 1] = ("%s shows %q"):format(row.label, shown)
+      end
+    end
+    H.eq({}, jargon, "menu entries should read like keys, e.g. \"Space D D\"")
   end)
 
   H.it("found shortcuts to check", function()

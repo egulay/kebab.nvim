@@ -252,7 +252,11 @@ local view = {
   { name = "Follow External Edits", cmd = A.ex("IdeFollow"), rtxt = "<leader>uf" },
 }
 
-return {
+-- Shortcuts are declared canonically above -- `<leader>DD` -- because that is
+-- what menu_shortcuts_spec checks against the real mappings. What goes on
+-- screen is what a person presses: "Space D D". kebab.keys is the one place
+-- that converts, so the two cannot drift.
+return require("kebab.keys").humanise({
   { name = "Project", items = project },
   { name = "File", items = file },
   { name = "Edit", items = edit },
@@ -261,4 +265,4 @@ return {
   { name = "Git", items = git },
   { name = "Database", items = database },
   { name = "View", items = view },
-}
+})

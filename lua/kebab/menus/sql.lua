@@ -49,4 +49,6 @@ for _, section in ipairs(editor) do
   end
 end
 
-return items
+-- Shown as what a person presses ("Space S"), not as <leader>S. The canonical
+-- form stays in `keyspec` for the sweep.
+return require("kebab.keys").humanise(items)

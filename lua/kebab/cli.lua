@@ -180,27 +180,64 @@ function M.db(name)
     return vim.notify(err, vim.log.levels.ERROR)
   end
   if #list == 0 then
-    return vim.notify("No database connections yet — <leader>Da or :IdeDbAdd adds one", vim.log.levels.WARN)
+    return vim.notify(("No database connections yet — press %s, or run :IdeDbAdd, to add one")
+      :format(require("kebab.keys").human("<leader>Da")), vim.log.levels.WARN)
   end
 
-  -- The file tree is not wanted here: a database IDE's left column is the
-  -- data source tree, and with both open the statement and rows panes were
-  -- squeezed into 20 columns. Measured in a real terminal, which is the only
-  -- place window geometry can be measured at all.
-  M.close_file_explorer()
+  -- Establishing the mode is scheduled, and the cleanup runs twice.
+  --
+  -- `kebab db` is a mode: it owns the screen while it is up. Doing that
+  -- synchronously did not work, because at that point the editor is still
+  -- starting -- the always-on explorer opens itself from a scheduled callback,
+  -- so it reappeared *after* being closed, and `:only` kept the single window
+  -- that existed before the others were created. Measured in a real terminal
+  -- with two files open: five windows, the explorer back, and a leftover code
+  -- window five columns wide.
+  --
+  -- <leader>DD and the menu entry do not do any of this: inside a working
+  -- session you want the data source tree beside your work, not instead of it.
+  local function establish(after)
+    M.close_file_explorer()
+    pcall(vim.cmd, "only")
+    after()
+    -- and again, for anything that was already queued when we started
+    vim.schedule(function()
+      M.close_file_explorer()
+      pcall(function()
+        require("kebab.dbide").pin_tree()
+      end)
+    end)
+  end
 
   if name == nil or name == "" then
-    -- The explorer belongs to a lazy spec, so it has to be loaded before its
-    -- command is called -- see the `cmd` triggers in plugins/sql.lua.
-    pcall(function()
-      require("lazy").load({ plugins = { "vim-dadbod-ui" } })
+    vim.schedule(function()
+      establish(function()
+        -- The explorer belongs to a lazy spec, so it has to be loaded before
+        -- its command is called -- see the `cmd` triggers in plugins/sql.lua.
+        pcall(function()
+          require("lazy").load({ plugins = { "vim-dadbod-ui" } })
+        end)
+        db.publish()
+        local ok, cerr = pcall(vim.cmd, "DBUI")
+        if not ok then
+          vim.notify("Could not open the database explorer: " .. tostring(cerr), vim.log.levels.ERROR)
+        end
+      end)
     end)
-    db.publish()
-    local ok, cerr = pcall(vim.cmd, "DBUI")
-    if not ok then
-      return vim.notify("Could not open the database explorer: " .. tostring(cerr), vim.log.levels.ERROR)
-    end
     return
+  end
+
+  local function open_console(c)
+    vim.schedule(function()
+      establish(function()
+        pcall(function()
+          require("lazy").load({ plugins = { "vim-dadbod-ui" } })
+        end)
+        db.publish()
+        pcall(vim.cmd, "DBUI")
+        require("kebab.dbide").layout(c)
+      end)
+    end)
   end
 
   local matches = M.resolve_connection(name)
@@ -210,14 +247,14 @@ function M.db(name)
       vim.log.levels.ERROR)
   end
   if #matches == 1 then
-    return db.console(matches[1])
+    return open_console(matches[1])
   end
   vim.ui.select(matches, {
     prompt = ("%d connections match %q"):format(#matches, name),
     format_item = function(c) return ("%-22s %s"):format(c.name, c.url) end,
   }, function(choice)
     if choice then
-      db.console(choice)
+      open_console(choice)
     end
   end)
 end

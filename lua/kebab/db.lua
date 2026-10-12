@@ -645,7 +645,8 @@ function M.console(connection)
     vim.cmd("edit " .. vim.fn.fnameescape(path))
     vim.bo.filetype = "sql"
     M.attach(c)
-    vim.notify(("SQL console on %s — <leader>S runs the statement under the cursor"):format(c.name))
+    vim.notify(("SQL console on %s — press %s to run the statement under the cursor")
+      :format(c.name, require("kebab.keys").human("<leader>S")))
   end)
 end
 

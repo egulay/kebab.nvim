@@ -96,12 +96,20 @@ H.describe("`kebab db`", function()
     with_connections(sample, function()
       -- No vim.ui is stubbed on purpose: a scripted answer would hide a
       -- picker, and the point of naming a connection is that nothing asks.
+      --
+      -- `kebab db` establishes its layout from a scheduled callback -- it has
+      -- to, or the always-on explorer reopens itself afterwards -- so this
+      -- waits for it. Waiting here is also what keeps the deferred work from
+      -- landing in the middle of the next spec.
       H.capture_notify(function() cli.db("beta") end)
+      H.ok(vim.wait(10000, function()
+        return vim.b.kebab_db_editor == true
+      end, 20), "the statement pane should open")
       H.eq("sql", vim.bo.filetype)
       local attached = D.attached()
       H.ok(attached, "the buffer should carry a connection")
       H.eq("jdbc:sqlite:/tmp/beta.db", attached.url)
-      H.matches("beta%-%d+%.sql$", vim.api.nvim_buf_get_name(0),
+      H.matches("beta%.sql$", vim.api.nvim_buf_get_name(0),
         "a console is a real file, so it survives a restart")
     end)
   end)

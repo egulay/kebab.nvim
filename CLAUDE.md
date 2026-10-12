@@ -696,6 +696,28 @@ to see it), so a CI log cannot leak what is being checked for.
 Terms there are substrings and case-insensitive, so they have to be long enough
 not to match ordinary words: `rpa` matches "counterpart".
 
+## What the user sees
+
+**Shortcuts are written as keys, never as key specifications.** `<leader>DD`
+is documentation shorthand; it was on screen in every right-click menu and 129
+times in the cheatsheet, and was called out as "stuff which you only
+understand". `kebab.keys.human` is the single place that renders a spec --
+`<leader>DD` -> `Space D D`, `<C-CR>` -> `Ctrl+Enter`, `]p` -> `] p`,
+`<2-LeftMouse>` -> `double click` -- and it reads `vim.g.mapleader`, so a
+different leader renders correctly without touching anything else.
+
+Menus still *declare* the canonical form, because `menu_shortcuts_spec` checks
+that against the real mappings; `kebab.keys.humanise` rewrites `rtxt` for the
+screen and keeps the canonical in `keyspec`. Any sweep that matches an
+advertised key against a mapping has to read `keyspec or rtxt` -- two specs
+broke on that. Two assertions keep it honest: no menu entry may *show* a `<`
+or the word leader, and neither may the cheatsheet.
+
+**`confirm` is on** (`plugins/ui.lua`), so leaving an edited buffer asks "Save
+changes to ...?" rather than refusing with `E37: No write since last change`.
+The user asked for the dialog they had seen in the SQL panes to be the
+behaviour everywhere; it is an editor option, so it applies to every buffer.
+
 ## Tests
 
 `./tests/run.sh` runs everything (`./tests/run.sh project` filters by spec
