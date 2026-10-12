@@ -593,10 +593,16 @@ function M.doctor()
   end
 
   -- ------------------------------------------------------------- required
+  -- 0.12, not 0.11: aerial.nvim's and refactoring.nvim's current releases
+  -- both refuse to initialise below it -- aerial by returning from setup()
+  -- after a notify_once, which removes the command stub lazy created, so
+  -- "File Structure" is silently dead. Measured in a container on 0.11.4
+  -- after the README had claimed 0.11 for months.
   local v = vim.version()
-  add("Required", "Neovim >= 0.11",
-    (v.major > 0 or v.minor >= 11),
-    ("%d.%d.%d"):format(v.major, v.minor, v.patch))
+  add("Required", "Neovim >= 0.12",
+    (v.major > 0 or v.minor >= 12),
+    ("%d.%d.%d"):format(v.major, v.minor, v.patch),
+    { why = "aerial and refactoring refuse to run below it" })
 
   local layer = vim.api.nvim_get_runtime_file("lua/kebab/project.lua", false)[1]
   add("Required", "kebab layer on runtimepath", layer ~= nil, layer or "not found")
@@ -608,6 +614,14 @@ function M.doctor()
   for _, cmd in ipairs({ "IdeOpenProject", "IdeNewProject", "IdeInitHere", "IdeCheatsheet" }) do
     add("Required", ":" .. cmd, vim.fn.exists(":" .. cmd) >= 1)
   end
+
+  -- The file tree the layer is built on. Required because its absence is
+  -- invisible: LazyVim allows one explorer, decides which before this layer's
+  -- spec exists, and then refuses the import without a word -- so a fresh
+  -- install had no tree at all and nothing said so. @see kebab.lazyvimjson
+  local explorer_ok, explorer_detail = require("kebab.lazyvimjson").explorer_ready()
+  add("Required", "file explorer: neo-tree", explorer_ok, explorer_detail,
+    { hint = not explorer_ok and "run setup.sh again, or add the extra to lazyvim.json" or nil })
 
   for _, tool in ipairs(REQUIRED) do
     local path = vim.fn.exepath(tool.exe)

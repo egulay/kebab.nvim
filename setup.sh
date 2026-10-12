@@ -36,6 +36,8 @@ Options:
   --no-spec      do not write the Neovim plugin spec
   --no-doctor    skip the dependency check at the end
   --force        overwrite an existing plugin spec without asking
+  --yes          answer yes to everything (same as --force); for CI, and for
+                 an install you do not want to sit through
   -h, --help     this
 
 Environment:
@@ -50,7 +52,7 @@ while [ $# -gt 0 ]; do
     --no-path) DO_PATH=0; shift ;;
     --no-spec) DO_SPEC=0; shift ;;
     --no-doctor) DO_DOCTOR=0; shift ;;
-    --force) FORCE=1; shift ;;
+    --force | --yes) FORCE=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'setup: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -89,7 +91,7 @@ confirm() {
     return 0
   fi
   if [ ! -t 0 ]; then
-    warn "not a terminal, so assuming no: $prompt (use --force to say yes)"
+    warn "not a terminal, so assuming no: $prompt (--yes answers yes to everything)"
     return 1
   fi
   local reply
@@ -121,7 +123,26 @@ command -v git >/dev/null 2>&1 || die "git is not on PATH."
 say "git $(git --version | awk '{print $3}')"
 
 if [ ! -d "$CONFIG" ]; then
-  die "no Neovim config at $CONFIG. Install LazyVim first: https://lazyvim.github.io"
+  # Dying here was the first wall a stranger hit. This layer is a set of
+  # lazy.nvim specs, so it needs a LazyVim config to be imported into, and
+  # "install LazyVim first" is a second set of instructions to go and follow.
+  # Offer to do it -- never silently, because it creates a config in their
+  # home directory.
+  warn "no Neovim config at $CONFIG."
+  if confirm "Clone the LazyVim starter into it?"; then
+    command -v git >/dev/null 2>&1 || die "git is not on PATH."
+    if [ "$DRY" -eq 1 ]; then
+      say "would clone https://github.com/LazyVim/starter into $CONFIG"
+    else
+      mkdir -p "$(dirname "$CONFIG")"
+      git clone --depth 1 https://github.com/LazyVim/starter "$CONFIG" \
+        || die "could not clone the LazyVim starter."
+      rm -rf "$CONFIG/.git"
+      say "cloned the LazyVim starter into $CONFIG"
+    fi
+  else
+    die "nothing was changed. Install LazyVim, then run this again: https://lazyvim.github.io"
+  fi
 fi
 if [ ! -e "$CONFIG/lua/config/lazy.lua" ]; then
   warn "$CONFIG/lua/config/lazy.lua not found -- this expects a LazyVim config."
@@ -164,6 +185,38 @@ return {
   else
     write_file "$SPEC" <<<"$NEW_SPEC"
     say "wrote $SPEC"
+  fi
+fi
+
+# --------------------------------------------- the extras LazyVim arbitrates
+#
+# LazyVim allows one explorer and one picker, and decides which while its own
+# spec is built -- before this layer's spec exists. A nested import is
+# invisible to that decision, so on a fresh config snacks explorer wins and
+# `lazyvim.plugins.extras.editor.neo-tree` is refused with no warning at all:
+# the always-on tree, the tree right-click menu and the pinned database panes
+# have nothing to attach to. The one place LazyVim looks in time is its own
+# lazyvim.json, which is what `:LazyExtras` writes -- so this merges the entry
+# into it, keeping whatever else is there.
+if [ "$DO_SPEC" -eq 1 ]; then
+  step "Recording the file explorer LazyVim should use"
+  if [ "$DRY" -eq 1 ]; then
+    say "would add lazyvim.plugins.extras.editor.neo-tree to $CONFIG/lazyvim.json"
+  else
+    EXTRA_OUT=$("$NVIM" -n --headless --noplugin \
+      --cmd "set runtimepath+=$REPO" \
+      -c "lua local J = require('kebab.lazyvimjson')
+          local changed, err, added = J.ensure({ path = '$CONFIG/lazyvim.json' })
+          if err then print('ERR ' .. err)
+          elseif changed then print('ADDED ' .. table.concat(added, ' '))
+          else print('ALREADY') end" \
+      -c "qa!" 2>&1 | tail -n 1)
+    case "$EXTRA_OUT" in
+      ADDED*) say "added neo-tree to lazyvim.json${EXTRA_OUT#ADDED}" ;;
+      ALREADY*) say "already recorded" ;;
+      *) warn "could not update $CONFIG/lazyvim.json: ${EXTRA_OUT#ERR }"
+         say "add \"lazyvim.plugins.extras.editor.neo-tree\" to its extras list by hand" ;;
+    esac
   fi
 fi
 

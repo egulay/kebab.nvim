@@ -276,7 +276,11 @@ H.describe("kebab doctor", function()
   end
 
   for _, name in ipairs({
-    "Neovim >= 0.11",
+    -- 0.12, not 0.11: aerial and refactoring both refuse to initialise below
+    -- it, aerial by returning from setup() after a notify_once -- which
+    -- removes lazy's command stub and leaves "File Structure" silently dead.
+    "Neovim >= 0.12",
+    "file explorer: neo-tree",
     "kebab layer on runtimepath",
     "lazy.nvim loaded",
     "LazyVim loaded",

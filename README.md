@@ -68,7 +68,7 @@ something genuinely **required** is absent, so it is safe in a script.
 
 | | |
 |---|---|
-| **Required** | Neovim 0.11+ with a LazyVim config, `git`, `curl` |
+| **Required** | Neovim 0.12+ with a LazyVim config, `git`, `curl` |
 | **Per language** | a JDK, Maven/Gradle, Node, Python, Go, Rust, Ruby, Flutter — only the ones you use |
 | **Optional** | `javac` (the SQL editor), `unzip` (the Spring scaffold), `jq` (readable config files), `inotify-tools` (`:IdeFollow`), `lazygit` |
 
@@ -87,25 +87,37 @@ they are.
 
 ## Install
 
-Clone it, then run the installer from the clone:
+One command, from nothing:
 
 ```bash
-git clone <this repo> ~/Projects/kebab.nvim
-cd ~/Projects/kebab.nvim
-./setup.sh
+git clone <this repo> ~/Projects/kebab.nvim && ~/Projects/kebab.nvim/install.sh
 ```
 
-It registers the layer with lazy.nvim, puts the `kebab` command on your PATH,
-and finishes by running `kebab doctor` so you learn what is missing now rather
-than the first time you open a project. Nothing is overwritten without asking,
-running it twice changes nothing, and `./setup.sh --dry-run` prints every action
-instead of taking it.
+That ends with an editor you can use. `install.sh` writes the lazy.nvim spec,
+puts the `kebab` command on your PATH, installs the plugins, and prints what is
+still missing — and if there is no Neovim config at all it clones the
+[LazyVim](https://lazyvim.github.io) starter first, so a bare machine needs
+nothing else. It asks nothing by default; `--ask` makes it confirm each step,
+`--dry-run` prints what it would do and changes nothing.
 
-Requires Neovim 0.11 or newer and an existing
-[LazyVim](https://lazyvim.github.io) config.
+Already have the clone, or want it somewhere else:
 
-Restart Neovim afterwards. Mason installs the tooling on first launch; `jdtls`
-takes about a minute to index a Maven project the first time.
+```bash
+./install.sh                    # from inside the clone
+KEBAB_REPO=<this repo> curl -fsSL <raw install.sh> | bash
+./install.sh --dir ~/src/kebab.nvim
+```
+
+`setup.sh` is the half that writes the config, and can still be run on its own
+(`./setup.sh`, `--yes` to skip the questions, `--dry-run` to see them). Nothing
+is overwritten without asking, and running either twice changes nothing.
+
+Requires Neovim 0.12 or newer and `git` — two of the plugins this layer
+declares (aerial, refactoring) refuse to initialise below it, and `kebab
+doctor` says so rather than leaving you with a feature that quietly does
+nothing. Restart Neovim afterwards: Mason
+installs the language tooling on first launch, and `jdtls` takes about a minute
+to index a Maven project the first time.
 
 ### Doing it by hand
 

@@ -34,6 +34,11 @@ local FIRST = {
 }
 
 -- Editor capability, not language support: these are the layer's own.
+--
+-- `editor.neo-tree` is here *and* recorded in lazyvim.json by setup.sh: an
+-- import nested inside this layer's spec is invisible to the decision LazyVim
+-- makes about which explorer to use, so on a fresh config this one is refused
+-- without a word. @see kebab.lazyvimjson
 local CORE = {
   "lazyvim.plugins.extras.ai.claudecode",
   "lazyvim.plugins.extras.editor.aerial",
@@ -41,9 +46,23 @@ local CORE = {
   "lazyvim.plugins.extras.editor.inc-rename",
   "lazyvim.plugins.extras.editor.neo-tree",
   "lazyvim.plugins.extras.editor.overseer",
-  "lazyvim.plugins.extras.editor.refactoring",
   "lazyvim.plugins.extras.util.project",
   "lazyvim.plugins.extras.util.rest",
+}
+
+-- Extras that need 0.12, which is also this layer's floor -- so this is a
+-- safety net, not a feature gate.
+--
+-- refactoring.nvim's current release raises "requires Neovim 0.12 or higher"
+-- when it loads, and on 0.11 that surfaces as "Error detected while
+-- processing command line" with the rest of the startup abandoned. aerial's
+-- setup() returns early below 0.12 after a notify_once, which deletes the
+-- command stub lazy made and leaves "File Structure" silently dead. Both were
+-- found by installing into a container on 0.11.4; the README said 0.11 for
+-- months. The floor is 0.12 now (`kebab doctor` checks it), and this keeps a
+-- too-old Neovim degrading rather than erroring on startup.
+local NEWER = {
+  { import = "lazyvim.plugins.extras.editor.refactoring", needs = "nvim-0.12" },
 }
 
 local specs, seen = {}, {}
@@ -59,6 +78,11 @@ for _, name in ipairs(FIRST) do
 end
 for _, name in ipairs(CORE) do
   add(name)
+end
+for _, gated in ipairs(NEWER) do
+  if vim.fn.has(gated.needs) == 1 then
+    add(gated.import)
+  end
 end
 -- Whatever the languages ask for. Requiring the registry here is safe: it has
 -- no dependencies of its own, which matters because this file is evaluated
