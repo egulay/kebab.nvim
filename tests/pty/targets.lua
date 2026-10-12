@@ -137,6 +137,17 @@ function M.collect()
     local line = line_matching(filetree, "%a") or 1
     local row, col = screen_at(filetree, math.max(line, 2), 4)
     out.tree_node = { row = row, col = col }
+    -- A named file in the tree, for a case that has to click one particular
+    -- entry rather than "whatever is at the top". $KEBAB_PTY_TREE_FILES is a
+    -- space-separated list; each becomes `tree_<name>` with the dots and
+    -- dashes slugged, aimed at the text rather than the icon.
+    for name in (vim.env.KEBAB_PTY_TREE_FILES or ""):gmatch("%S+") do
+      local at = line_matching(filetree, vim.pesc(name))
+      if at then
+        local r, c = screen_at(filetree, at, 6)
+        out["tree_" .. name:gsub("[^%w]+", "_")] = { row = r, col = c }
+      end
+    end
   end
 
   local editor = editor_win()

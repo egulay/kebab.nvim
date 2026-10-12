@@ -526,5 +526,68 @@ check "with the dependency the wizard offered"                 "STARTER web"    
 check "and a Java source file in it"                           "JAVA [1-9]"              "$work/report.txt"
 check "the editor moved into the new project"                  "CWD .*projects/sample-app" "$work/report.txt"
 
+# --- a double click on an image goes to the desktop, not into a buffer ----
+#
+# Asked for directly: "when user double click some image files or pdf or any
+# other file which is not text based to open via nvim could you please make the
+# OS open it with its default app". A unit test can prove the decision; only a
+# real double click in a real tree proves the mapping, neo-tree's command
+# merge and the autocmd all line up -- and the control half of this case (a
+# text file, double clicked the same way) is what shows the test can tell the
+# two apart rather than just never opening anything.
+#
+# No image viewer is launched: vim.g.kebab_open_external.command points at a
+# script that appends its argument to a file.
+mkdir -p "$work/tree"
+printf '\211PNG\r\n\032\n\000\000\000binary' > "$work/tree/logo.png"
+printf 'plain text\n' > "$work/tree/notes.txt"
+cat > "$work/opener.sh" <<'OPENER'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$WORK/opened.log"
+OPENER
+chmod +x "$work/opener.sh"
+cat > "$work/extchild.lua" <<'LUA'
+vim.g.kebab_follow_autostart = false
+package.path = vim.env.HERE .. "/?.lua;" .. package.path
+require("targets").publish(vim.env.TARGETS)
+vim.g.kebab_open_external = { command = { vim.env.WORK .. "/opener.sh" } }
+vim.defer_fn(function()
+  local out = {}
+  local log = vim.env.WORK .. "/opened.log"
+  if vim.fn.filereadable(log) == 1 then
+    for _, line in ipairs(vim.fn.readfile(log)) do
+      out[#out + 1] = "OPENED " .. vim.fn.fnamemodify(line, ":t")
+    end
+  else
+    out[#out + 1] = "OPENED (nothing)"
+  end
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(b)
+    if name ~= "" and vim.api.nvim_buf_is_loaded(b) then
+      out[#out + 1] = ("BUF %s lines=%d"):format(vim.fn.fnamemodify(name, ":t"),
+        #vim.api.nvim_buf_get_lines(b, 0, -1, false))
+    end
+  end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 40000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "$work/tree", "-c", "luafile $work/extchild.lua"],
+  "actions": [ {"kind":"wait","seconds":12},
+               {"kind":"click_target","name":"tree_logo_png","file":"$work/targets","count":2},
+               {"kind":"wait","seconds":6},
+               {"kind":"click_target","name":"tree_notes_txt","file":"$work/targets","count":2},
+               {"kind":"wait","seconds":6} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 110 }
+JSON
+rm -f "$work/report.txt" "$work/opened.log"
+KEBAB_PTY_TREE_FILES="logo.png notes.txt" WORK="$work" HERE="$here" TARGETS="$work/targets" \
+  REPORT_AFTER=40000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "a double click on a PNG hands it to the desktop" "OPENED logo.png"  "$work/report.txt"
+check "and does not open it in a buffer"                -v                "$work/report.txt" "BUF logo.png"
+check "a double click on a text file still opens it"    "BUF notes.txt"   "$work/report.txt"
+check "and that one is not sent to the desktop"         -v                "$work/report.txt" "OPENED notes.txt"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

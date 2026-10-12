@@ -97,6 +97,13 @@ end
 function M.setup()
   local group = vim.api.nvim_create_augroup("ide_auto_explorer", { clear = true })
 
+  -- A file the editor cannot usefully show goes to the desktop instead. Set
+  -- up here because this runs from the neo-tree spec's `init`, i.e. before any
+  -- file has been read -- a BufReadCmd registered later than the first read is
+  -- a BufReadCmd that missed it, which is the same timing trap the explorer
+  -- autocmd above exists for.
+  require("kebab.openexternal").setup()
+
   vim.api.nvim_create_autocmd("BufReadPost", {
     group = group,
     callback = function(ev)

@@ -395,6 +395,14 @@ local OPTIONAL = {
     why = "the git UI behind Space → g → g",
     without = "that one keybinding; diffview and gitsigns are unaffected",
   },
+  {
+    -- Only xdg-open is named, because it is the one this layer looks for
+    -- first; `handlr` and `gio open` are tried after it, and macOS has `open`
+    -- built in. @see kebab.openexternal
+    exe = "xdg-open",
+    why = "opens an image, a PDF or any other non-text file with the desktop's app",
+    without = "those open as bytes in a buffer instead (package: xdg-utils)",
+  },
 }
 
 ---Mason installs 31 of its 55 packages *through* a language toolchain, so a

@@ -37,6 +37,12 @@ charge, this adds the IDE on top.
   restart.
 - **Project file generators**: a `.gitignore`, Dockerfile and CI workflow for
   the language in hand, plus `.editorconfig`.
+- **Non-text files go to the desktop.** Double click an image, a PDF, a
+  spreadsheet, an archive, a video or a font in the tree and the system's own
+  application opens it, instead of its bytes landing in a buffer. Also when you
+  open one any other way — the picker, `nvim logo.png`, `gf` over a path. If
+  nothing on the machine handles the type, it says so and opens the file in the
+  editor after all.
 - **Per-project run configurations** in `.kebab/run.json`, with args and env,
   committed so your team gets them too.
 - **Follow external edits** (`Space → u → f`): when something outside the editor
@@ -320,6 +326,43 @@ Completion knows tables, `customers.` → that table's columns with their types,
 and aliases (`select c. from customers c`). It is a separate blink source from
 `vim-dadbod-completion`, which covers table prefixes and aliases but not the
 bare table list or `table.`.
+
+## Files the editor cannot show
+
+Double click `logo.png` in the tree and the system image viewer opens it, not a
+buffer full of mojibake. The same for a PDF, a spreadsheet, a presentation, an
+archive, audio, video, a font, and compiled output — and not only from the tree:
+opening one from the picker, from `nvim logo.png`, or with `gf` over a path goes
+the same way.
+
+Three things it is careful about:
+
+- **Text that looks like an image stays text.** `.svg` and `.xml` are edited as
+  often as they are viewed, so they open in the editor. So do `.json`, `.csv`,
+  `.md` and `.sql`.
+- **Nothing is read in order to decide not to read it.** The decision is by
+  extension, through a `BufReadCmd`, so a 4 GB video is never loaded. The tree's
+  own double click goes further and sniffs the first kilobyte, because there the
+  path is in hand and nothing has touched the file — that is what catches a
+  `.bin`, a `.dat` or a compiled artifact with no suffix at all.
+- **If the desktop has no answer, the editor gets the file.** A missing handler
+  is reported and the file opens as it used to, which is a poor outcome but
+  better than a double click that does nothing and says nothing.
+
+```lua
+-- all optional
+vim.g.kebab_open_external = false                        -- never do this
+vim.g.kebab_open_external = {
+  extensions = { "kra", "fig" },   -- added to the defaults, not replacing them
+  replace_extensions = false,
+  sniff = true,                    -- the tree's content check
+  command = { "handlr", "open" },  -- default: xdg-open, handlr, gio open, or
+                                   -- `open` on macOS
+  notify = true,
+}
+```
+
+`kebab doctor` reports a missing `xdg-open` and what it costs.
 
 ## Adding a language
 

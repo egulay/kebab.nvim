@@ -82,6 +82,15 @@ return {
         },
       },
       filesystem = {
+        -- Double clicking an image, a PDF or any other file the editor cannot
+        -- show hands it to the desktop. The BufReadCmd in
+        -- `kebab.openexternal` catches every other way of opening one (the
+        -- picker, `nvim logo.png`, `gf`), but only by extension: a pattern has
+        -- to be known before the file is seen. Here the path is in hand and
+        -- nothing has read it, so the content sniff is a 1 KB read and catches
+        -- the long tail -- a `.bin`, a `.dat`, a compiled artifact with no
+        -- suffix at all.
+        commands = require("kebab.openexternal").neotree_commands(),
         -- keep the tree's selection on the file being edited
         follow_current_file = { enabled = true, leave_dirs_open = false },
         use_libuv_file_watcher = true,
