@@ -107,6 +107,31 @@ happened and was reported as "my file is corrupted" — twice, because the first
 check only looked at `git diff`, which was clean. Verify against scratch git
 repos under the scratchpad directory, or pass `-n` to disable swap entirely.
 
+**Saying something is done.** "Done" means the path a person uses was
+exercised, in the environment they use it in, and the result observed is in the
+report. Three things; if any is missing, the report says which one *before* the
+word "done" appears:
+
+1. **Exercised end to end** -- not the module, the path. Open the editor, open
+   the thing, press the key, click the mouse. `db.tables()` returning 48 tables
+   said nothing about the explorer, which was asking psql.
+2. **In the real environment.** A mouse claim needs a terminal with a UI
+   (`tests/pty/`); a database claim needs a live database; a window-geometry
+   claim needs a real window. A headless editor drops mouse input *silently*,
+   so a mouse test written there passes by doing nothing -- which is exactly
+   what happened, twice, and "verified" was reported both times.
+3. **Quoted.** Put the observation in the report -- the screen cells, the pager
+   line, the row that came back -- not the conclusion drawn from it. Then the
+   reader can disagree with the evidence instead of having to trust the claim.
+
+Plus a test that fails if it regresses, or the next session breaks it again.
+
+What "done" is *not*: the components exist and each is tested on its own. That
+was claimed for the SQL IDE, and the user then found -- in about ninety seconds
+each -- the explorer listing no tables, the mouse dead, no paging, and no menu
+entries for a query. Saying "connectivity, a table picker and completion are
+in; the tree flow and paging are not" would have cost nothing and been true.
+
 **Verify behaviour, not loading.** Several bugs shipped because a module
 loaded without error and was declared working. "The menu renders" is not "the
 menu entries do anything". Always assert on the real effect: file created, LSP

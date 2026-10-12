@@ -133,5 +133,54 @@ check "with Run Statement at the top of it"              "SCREEN.*Run Statement"
 check "and its shortcut beside it"                       "Run Statement.*leader>S" "$work/report.txt"
 check "the rows pager is in there"                       "SCREEN.*Rows" "$work/report.txt"
 
+# --- clicking a menu row actually runs it ----------------------------------
+#
+# The sweeps prove every entry points at something real, and
+# menu_behaviour_spec proves invoking that target has the effect it claims.
+# Neither proves that *clicking the row* dispatches to it -- which is the link
+# this layer has twice been wrong about. So: open a table, replace the
+# statement with something unmistakable, right-click, click "Run Statement",
+# and look for the result in the rows pane.
+cat > "$work/clickchild.lua" <<'LUA'
+vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
+vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+require("kebab.cli").db("")
+vim.defer_fn(function()
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+end, 7000)
+vim.defer_fn(function()
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    if vim.b[b].kebab_db_editor then
+      vim.api.nvim_buf_set_lines(b, 0, -1, false, { "select 'clicked-the-menu' as proof" })
+    end
+  end
+end, 14000)
+vim.defer_fn(function()
+  local out = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    if vim.b[b].kebab_db_output then
+      out[#out + 1] = "ROWS " .. table.concat(vim.api.nvim_buf_get_lines(b, 0, 8, false), " | ")
+    end
+  end
+  if #out == 0 then out[1] = "no rows pane" end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 34000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/clickchild.lua"],
+  "actions": [ {"kind":"wait","seconds":17},
+               {"kind":"click","col":60,"row":3,"button":2,"count":1},
+               {"kind":"wait","seconds":4},
+               {"kind":"click","col":50,"row":5,"button":0,"count":1},
+               {"kind":"wait","seconds":10} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 110 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" REPORT_AFTER=34000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "clicking a menu row runs that entry" "clicked-the-menu" "$work/report.txt"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
