@@ -82,6 +82,10 @@ test -f "$XDG_CONFIG_HOME/nvim/lua/plugins/kebab.lua" \
 test -x "$work/.local/bin/kebab" \
   || fail "setup.sh did not put kebab on PATH"
 
+# Deterministic, not well equipped: mason's installs are abandoned when this
+# editor exits, and what survives differs every run. @see plugins/mason.lua
+export KEBAB_NO_MASON_INSTALL=1
+
 say "installing the plugins (this is where a bad pin shows up)"
 nvim --headless -n "+Lazy! sync" +qa 2>&1 | tail -20
 # Lazy writes nothing to stdout on success, so the check is the lockfile

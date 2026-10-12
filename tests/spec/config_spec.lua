@@ -210,3 +210,42 @@ H.describe("the .http client", function()
     H.ok(vim.tbl_contains(lhs, "<leader>Rs"), "sending a request must still be bound")
   end)
 end)
+
+-- Mason's install list, and the one environment that must not have it.
+--
+-- `nvim --headless "+Lazy! sync" +qa` exits while mason is still installing --
+-- fourteen packages on the clean-machine run that found this -- so which tools
+-- exist while a suite runs depends on what finished in those few seconds. That
+-- differs by run, machine and network, and it produced a real failure: a
+-- half-installed gopls shadowing a working one, because mason prepends its bin
+-- directory to PATH.
+H.describe("mason's package list", function()
+  local function ensure_installed()
+    local spec = dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/mason.lua")
+    for _, fragment in ipairs(spec) do
+      if fragment[1] == "mason-org/mason.nvim" then
+        return fragment.opts(nil, {}).ensure_installed or {}
+      end
+    end
+    error("the mason fragment is gone")
+  end
+
+  H.it("comes from the languages, not from a list written here", function()
+    local saved = vim.env.KEBAB_NO_MASON_INSTALL
+    vim.env.KEBAB_NO_MASON_INSTALL = nil
+    local tools = ensure_installed()
+    vim.env.KEBAB_NO_MASON_INSTALL = saved
+    H.ok(#tools > 20, "expected the languages' tools, got " .. #tools)
+    H.ok(vim.tbl_contains(tools, "jdtls"), "jdtls should be in there")
+  end)
+
+  H.it("is empty when a run asks for determinism instead", function()
+    local saved = vim.env.KEBAB_NO_MASON_INSTALL
+    vim.env.KEBAB_NO_MASON_INSTALL = "1"
+    local tools = ensure_installed()
+    vim.env.KEBAB_NO_MASON_INSTALL = saved
+    H.eq({}, tools,
+      "KEBAB_NO_MASON_INSTALL=1 has to leave nothing to install, or a suite "
+        .. "runs against whatever happened to finish")
+  end)
+end)
