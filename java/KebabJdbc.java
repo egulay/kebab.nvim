@@ -151,6 +151,7 @@ public final class KebabJdbc {
         return;
       }
       if (mode.equals("close")) {
+        Cursor.close();
         respond(out, true, "");
         return;
       }
@@ -176,8 +177,15 @@ public final class KebabJdbc {
         case "tables" -> tables(conn);
         case "columns" -> columns(conn, arg);
         case "schema" -> schema(conn);
-        case "query" -> query(conn, payload);
-        case "page" -> page(conn, arg, payload);
+        case "query" -> {
+          Cursor.close(); // a new statement replaces the open result set
+          query(conn, payload);
+        }
+        case "page" -> {
+          Cursor.close();
+          page(conn, arg, payload);
+        }
+        case "cursor" -> Cursor.handle(conn, arg, payload);
         default -> throw new IllegalArgumentException("unknown mode: " + mode);
       }
     } finally {
@@ -653,6 +661,213 @@ public final class KebabJdbc {
   }
 
   /** An aligned table, the way psql and sqlite3 -column print one. */
+  /**
+   * A result set held open across requests, read a batch at a time.
+   *
+   * <p>This is how a database IDE pages: the statement runs <em>once</em> and
+   * successive batches come off the same cursor, streaming. Paging by
+   * re-running the query with LIMIT/OFFSET -- which this layer did first --
+   * executes the whole query again for every page, so walking a table is
+   * quadratic, and under any concurrent write the pages do not line up with
+   * each other: a row inserted before page 2 is fetched pushes a row from page
+   * 1 onto page 2, and a deleted one hides a row entirely.
+   *
+   * <p>One cursor at a time, because that is what a result grid shows. Running
+   * anything else on the connection closes it, which is also what a database
+   * IDE does when you execute a new statement.
+   *
+   * <p>Only reachable in serve mode: a one-shot process exits between
+   * requests, so there would be nothing to hold it open. kebab.dbide falls
+   * back to LIMIT/OFFSET, and then to skipping on the cursor, when there is no
+   * warm process.
+   */
+  private static final class Cursor {
+    private static Statement statement;
+    private static ResultSet rs;
+    private static List<String> headers;
+    private static List<String> pending; // read to answer "is there more?", not yet shown
+    private static long handedOut;
+    private static boolean autocommitRestore;
+    private static Connection owner;
+
+    static void handle(Connection conn, String arg, String sql) throws SQLException {
+      String[] parts = (arg == null ? "" : arg).split(":", 2);
+      String verb = parts.length > 0 ? parts[0].trim() : "";
+      int size = 100;
+      if (parts.length > 1 && !parts[1].isBlank()) {
+        try {
+          size = Integer.parseInt(parts[1].trim());
+        } catch (NumberFormatException e) {
+          throw new UsageException("cursor takes <verb>:<size>, got: " + arg);
+        }
+      }
+      if (size < 1) {
+        throw new UsageException("cursor size must be at least 1, got " + size);
+      }
+      switch (verb) {
+        case "open" -> open(conn, sql, size);
+        case "next" -> next(size);
+        case "close" -> {
+          close();
+          System.out.println("(closed)");
+        }
+        default -> throw new UsageException("cursor verb must be open, next or close: " + verb);
+      }
+    }
+
+    private static void open(Connection conn, String sql, int size) throws SQLException {
+      close();
+      if (sql == null || sql.isBlank()) {
+        throw new UsageException("nothing to run");
+      }
+      List<String> statements = splitStatements(sql);
+      if (statements.isEmpty()) {
+        throw new UsageException("nothing to run");
+      }
+      if (statements.size() > 1) {
+        throw new UsageException("paging needs a single statement, got " + statements.size());
+      }
+
+      // PostgreSQL's driver honours the fetch size only inside a transaction;
+      // outside one it reads the entire result set before returning the first
+      // row, which would defeat the whole arrangement.
+      owner = conn;
+      autocommitRestore = conn.getAutoCommit();
+      if (autocommitRestore) {
+        try {
+          conn.setAutoCommit(false);
+        } catch (SQLException e) {
+          autocommitRestore = false; // nothing to restore
+        }
+      }
+
+      Statement st = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+      try {
+        st.setFetchSize(size);
+      } catch (SQLException e) {
+        // advisory; a driver without it still works, just less lazily
+      }
+      boolean hasResult;
+      try {
+        hasResult = st.execute(statements.get(0));
+      } catch (SQLException e) {
+        st.close();
+        release();
+        throw e;
+      }
+      if (!hasResult) {
+        int updated = st.getUpdateCount();
+        st.close();
+        release();
+        System.out.println(
+            updated >= 0
+                ? "(" + updated + " row" + (updated == 1 ? "" : "s") + " affected)"
+                : "(no results)");
+        System.out.println("-- kebab-cursor shown=0 total=0 more=0 open=0");
+        return;
+      }
+      statement = st;
+      rs = st.getResultSet();
+      ResultSetMetaData md = rs.getMetaData();
+      headers = new ArrayList<>();
+      for (int i = 1; i <= md.getColumnCount(); i++) headers.add(md.getColumnLabel(i));
+      pending = null;
+      handedOut = 0;
+      emit(size);
+    }
+
+    private static void next(int size) throws SQLException {
+      if (rs == null) {
+        throw new UsageException("no result set is open; run the statement first");
+      }
+      emit(size);
+    }
+
+    /** Hand out up to `size` rows, and read one more to know whether to offer another page. */
+    private static void emit(int size) throws SQLException {
+      int cols = headers.size();
+      List<List<String>> rows = new ArrayList<>();
+      if (pending != null) {
+        rows.add(pending);
+        pending = null;
+      }
+      while (rows.size() < size && rs.next()) {
+        rows.add(readRow(rs, cols));
+      }
+      // The probe row is kept, not discarded: having called next() it is ours,
+      // and dropping it would skip a row at every page boundary.
+      boolean more = rs.next();
+      if (more) {
+        pending = readRow(rs, cols);
+      }
+      handedOut += rows.size();
+
+      StringBuilder sb = renderGrid(headers, rows);
+      sb.append('\n').append('\n');
+      if (rows.isEmpty()) {
+        sb.append("(no more rows)");
+      } else {
+        sb.append("(")
+            .append(rows.size())
+            .append(rows.size() == 1 ? " row" : " rows")
+            .append(more ? ", more to come)" : ", end of the result)");
+      }
+      sb.append('\n')
+          .append("-- kebab-cursor shown=")
+          .append(rows.size())
+          .append(" total=")
+          .append(handedOut)
+          .append(" more=")
+          .append(more ? 1 : 0)
+          .append(" open=")
+          .append(more ? 1 : 0);
+      System.out.println(sb);
+      if (!more) {
+        close(); // nothing left to hold open
+      }
+    }
+
+    static void close() {
+      if (rs != null) {
+        try {
+          rs.close();
+        } catch (SQLException e) {
+          // closing is best effort
+        }
+      }
+      if (statement != null) {
+        try {
+          statement.close();
+        } catch (SQLException e) {
+          // ditto
+        }
+      }
+      release();
+    }
+
+    /** Give the connection back the way it was handed over. */
+    private static void release() {
+      rs = null;
+      statement = null;
+      headers = null;
+      pending = null;
+      if (owner != null && autocommitRestore) {
+        try {
+          owner.rollback(); // a read needs no commit; this frees the cursor
+        } catch (SQLException e) {
+          // nothing useful to do
+        }
+        try {
+          owner.setAutoCommit(true);
+        } catch (SQLException e) {
+          // ditto
+        }
+      }
+      autocommitRestore = false;
+      owner = null;
+    }
+  }
+
   private static void printTable(ResultSet rs) throws SQLException {
     ResultSetMetaData md = rs.getMetaData();
     int cols = md.getColumnCount();

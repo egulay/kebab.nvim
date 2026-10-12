@@ -592,6 +592,36 @@ client attached, file contents reverted.
   pager): those go in `menu_shortcuts_spec`'s `BUFFER_LOCAL` with a reason, and
   the sweep then asserts they are *not* mapped globally. Mapping `R` globally
   to a database action would take an ordinary key from every buffer.
+- **Paging holds the result set open; it does not re-run the query.** This
+  took three attempts and the first two were both wrong in ways that looked
+  fine:
+  1. skipping rows on the cursor after re-executing -- page 50 pulls five
+     thousand rows to show a hundred;
+  2. re-running wrapped in the dialect's LIMIT/OFFSET -- executes the whole
+     query again per page, and the pages shift under concurrent writes.
+  What an SQL editor actually does, and what `KebabJdbc`'s `Cursor` does now:
+  execute once, keep the `ResultSet` on the connection in the warm process,
+  hand out a batch per request, and keep the already-fetched pages in
+  `kebab.dbide` so going back is instant -- a forward-only result set cannot be
+  rewound. The two older paths remain as fallbacks, in that order, for when
+  there is no warm process or the dialect has no OFFSET clause; the pager line
+  says which was used (`held`, `re-queried`, `skipped`).
+  The test that proves it: another connection deletes a row from page 1 while
+  the result set is open, and page 2 still starts at row 101. A re-queried page
+  would start at 102.
+- **The probe row must be kept, not discarded.** "Is there a next page?" is
+  answered by reading one row past the batch -- and having called `next()` that
+  row is yours. Dropping it skips a row at every page boundary. `Cursor.pending`
+  holds it and it is emitted first next time. The other half of the same trap:
+  asking the server for exactly `size` rows makes `more` false on every page,
+  so Next refuses to move while the header says "page 1 of 100".
+- **Paging is declared per driver, not by default.** A table of two exceptions
+  over a silent default read as "only MySQL is handled" -- it was asked, fairly
+  -- and would have given a driver added later whatever the default happened to
+  be, though Firebird wants `ROWS` and DB2 `FETCH FIRST`. `paging_spec` fails
+  if a driver registered in `kebab.jdbc` has no clause.
+- `<A-Right>` is stored as **`<M-Right>`**: a keymap lookup in a spec has to
+  use the `M-` form or it finds nothing.
 - **`<leader>S` is already taken** -- snacks owns it as "Select Scratch
   Buffer". A buffer-local mapping wins inside its own buffer, so Run worked in
   the SQL panes and opened a *picker* everywhere else, which is what the

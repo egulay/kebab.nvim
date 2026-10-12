@@ -254,51 +254,96 @@ function M.pager(url)
 end
 
 ---Pull the footer the runner appends, and the lines without it.
+---
+---Two shapes, because there are two ways to page: `kebab-cursor` from a result
+---set held open across requests (what a database IDE does), and `kebab-page`
+---from the LIMIT/OFFSET and cursor-skip fallbacks.
 ---@param lines string[]
----@return string[] rows, table|nil info { offset, shown, more }
+---@return string[] rows, table|nil info { offset?, shown, more, total?, kind }
 function M.split_footer(lines)
   local rows, info = {}, nil
   for _, line in ipairs(lines or {}) do
-    local offset, shown, more = line:match("^%-%- kebab%-page offset=(%d+) shown=(%d+) more=([01])$")
-    if offset then
-      info = { offset = tonumber(offset), shown = tonumber(shown), more = more == "1" }
+    local shown, total, more = line:match("^%-%- kebab%-cursor shown=(%d+) total=(%d+) more=([01])")
+    if shown then
+      info = {
+        kind = "cursor",
+        shown = tonumber(shown),
+        total = tonumber(total),
+        more = more == "1",
+      }
     else
-      rows[#rows + 1] = line
+      local offset, pshown, pmore = line:match("^%-%- kebab%-page offset=(%d+) shown=(%d+) more=([01])$")
+      if offset then
+        info = {
+          kind = "page",
+          offset = tonumber(offset),
+          shown = tonumber(pshown),
+          more = pmore == "1",
+        }
+      else
+        rows[#rows + 1] = line
+      end
     end
   end
   return rows, info
 end
 
----The pager line shown above the rows.
+---The pager line shown above the rows: where you are, then what to press.
+---
+---Two lines, because the rows pane is about forty columns wide in the default
+---layout and one line carrying the position *and* five shortcuts ran off the
+---end of it.
 ---@param c kebab.DbConnection
 ---@param info table|nil
----@return string
+---@return string where, string how
 function M.pager_line(c, info)
+  local K = require("kebab.keys")
+  local how = ("-- run %s · next %s · back %s · first %s · re-run %s"):format(
+    K.human("<C-CR>"), K.human("<A-Right>"), K.human("<A-Left>"),
+    K.human("<A-Home>"), K.human("<A-r>"))
   if not info then
-    return ("-- %s"):format(c.name)
+    return ("-- %s"):format(c.name), how
   end
   local size = M.page_size()
-  local page = math.floor(info.offset / size) + 1
-  local first = info.shown > 0 and info.offset + 1 or info.offset
-  local last = info.offset + info.shown
+  local offset = info.offset or 0
+  local page = math.floor(offset / size) + 1
+  local first = info.shown > 0 and offset + 1 or offset
+  local last = offset + info.shown
   local total = info.more and "more" or tostring(last)
-  local K = require("kebab.keys")
-  -- Spelled out, because this line is on screen and "]p" is not something
-  -- anyone reads as two keystrokes until they are told.
-  return ("-- %s · rows %d-%d of %s · page %d · run: %s · next: %s · back: %s · first: %s · re-run: %s")
-    :format(c.name, first, last, total, page, K.human("<C-CR>"),
-      K.human("]p"), K.human("[p"), K.human("[P"), K.human("R"))
+  -- Where the rows came from is worth saying: "held" means the statement ran
+  -- once and this is the next batch off the same result set, which is the only
+  -- mode that is consistent while someone else is writing to the table.
+  local source = ({ cursor = "held", server = "re-queried", client = "skipped" })[info.kind or ""]
+  return ("-- %s · rows %d-%d of %s · page %d%s"):format(
+    c.name, first, last, total, page, source and (" · " .. source) or ""), how
 end
 
 ---Run `sql` and show its first page.
 ---@param c kebab.DbConnection
 ---@param sql string
 function M.run(c, sql)
-  PAGES[c.url] = { sql = sql, offset = 0 }
+  -- A new statement replaces the result set, so nothing from the last one is
+  -- kept: the warm process closes its cursor when any other request arrives.
+  PAGES[c.url] = { sql = sql, offset = 0, pages = {}, fetched = 0, cursor_open = false }
   return M.fetch(c)
 end
 
----Fetch the current page of the current statement.
+-- How a page was obtained, in the order they are preferred.
+--
+--   cursor  the statement ran once and the result set is held open in the warm
+--           process; each page is the next batch off it. What a database IDE
+--           does, and the only one that is consistent under concurrent writes
+--           and does not re-execute the query per page.
+--   server  the statement is re-run wrapped in the dialect's LIMIT/OFFSET.
+--           Used when there is no warm process to hold a cursor.
+--   client  the statement is re-run whole and rows are skipped on the cursor.
+--           Used when the dialect has no OFFSET clause this layer knows.
+--
+---Fetch the current page.
+---
+---A page already fetched comes from `pager.pages`, not from the database: that
+---is what makes going back instant, and -- with a held cursor -- it is the
+---only way back at all, since a forward-only result set cannot be rewound.
 ---@param c kebab.DbConnection
 function M.fetch(c)
   local pager = PAGES[c.url]
@@ -306,28 +351,80 @@ function M.fetch(c)
     return false, "nothing has been run on this connection yet"
   end
   db.ensure_credentials(c.url)
-  local arg = ("%d:%d"):format(pager.offset, M.page_size())
-  local lines, err = jdbc.run(c.url, "page", { args = { arg }, stdin = pager.sql, timeout = 300000 })
-  if not lines then
-    -- A script cannot be paged -- which statement's rows would it be? -- so
-    -- run it whole rather than refusing. Same for anything else the pager
-    -- cannot do: the rows matter more than the pager.
-    if tostring(err):find("paging needs a single statement", 1, true) then
-      local whole, werr = db.query(c, pager.sql)
-      if not whole then
-        return M.failed(c, werr)
-      end
-      PAGES[c.url] = nil
-      M.show_rows(c, vim.list_extend({ ("-- %s · not paged (several statements)"):format(c.name), "" }, whole))
-      return true
-    end
-    return M.failed(c, err)
+  local size = M.page_size()
+  local index = math.floor(pager.offset / size) + 1
+
+  -- already fetched: show it again without asking the database
+  local cached = pager.pages and pager.pages[index]
+  if cached then
+    pager.info = cached.info
+    M.render(c, cached.rows, cached.info)
+    return true
   end
+
+  local lines, err, kind
+
+  -- 1. the next batch from a result set held open in the warm process
+  if pager.cursor_open and index == (pager.fetched or 0) + 1 then
+    lines, err = jdbc.run(c.url, "cursor", { args = { ("next:%d"):format(size) }, timeout = 300000 })
+    kind = lines and "cursor" or nil
+  elseif index == 1 then
+    lines, err = jdbc.run(c.url, "cursor", { args = { ("open:%d"):format(size) }, stdin = pager.sql, timeout = 300000 })
+    kind = lines and "cursor" or nil
+  end
+
+  -- 2. the server's own LIMIT/OFFSET, when there is no cursor to hold
+  if not lines then
+    local paged = db.page_sql(c.url, pager.sql, pager.offset, size + 1)
+    if paged then
+      lines, err = jdbc.run(c.url, "page", { args = { ("0:%d"):format(size) }, stdin = paged, timeout = 300000 })
+      kind = lines and "server" or nil
+    end
+  end
+
+  -- 3. skipping on the cursor: dialect-free, slowest, always correct
+  if not lines then
+    local first_err = err
+    lines, err = jdbc.run(c.url, "page", {
+      args = { ("%d:%d"):format(pager.offset, size) },
+      stdin = pager.sql,
+      timeout = 300000,
+    })
+    kind = lines and "client" or nil
+    if not lines then
+      if tostring(first_err):find("paging needs a single statement", 1, true)
+        or tostring(err):find("paging needs a single statement", 1, true) then
+        -- A script has no single result set to page. Run it whole rather than
+        -- refusing: the rows matter more than the pager.
+        local whole, werr = db.query(c, pager.sql)
+        if not whole then
+          return M.failed(c, werr)
+        end
+        PAGES[c.url] = nil
+        M.show_rows(c, vim.list_extend({ ("-- %s · not paged (several statements)"):format(c.name), "" }, whole))
+        return true
+      end
+      return M.failed(c, first_err or err)
+    end
+  end
+
   local rows, info = M.split_footer(lines)
+  info = info or { shown = #rows, more = false }
+  info.kind = kind
+  info.offset = pager.offset
   pager.info = info
-  local header = { M.pager_line(c, info), "" }
-  M.show_rows(c, vim.list_extend(header, rows))
+  pager.pages = pager.pages or {}
+  pager.pages[index] = { rows = rows, info = info }
+  pager.fetched = math.max(pager.fetched or 0, index)
+  pager.cursor_open = kind == "cursor" and info.more or false
+  M.render(c, rows, info)
   return true
+end
+
+---Put a page on screen.
+function M.render(c, rows, info)
+  local where, how = M.pager_line(c, info)
+  M.show_rows(c, vim.list_extend({ where, how, "" }, rows))
 end
 
 ---Report a failed statement where the rows would have been.
@@ -464,22 +561,33 @@ end
 ---pressed far too often to live three keys deep.
 ---@param buf integer
 function M.bind_pager(buf)
-  -- Run is bound on *both* panes: pressing it while looking at the rows is the
-  -- obvious thing to do, and when it was not bound there the key fell through
-  -- to the global one and opened a picker.
+  -- Every key here had to be checked against what it already means, because
+  -- the first two attempts both took keys that were taken.
   --
-  -- Not <leader>S, which is what this used to be: snacks already owns
-  -- `<leader>S` as "Select Scratch Buffer", so outside these two buffers the
-  -- key advertised for Run opened something else entirely -- reported as
-  -- "space s to run but it opens different menu". `<leader>Dr` is in the
-  -- database namespace and free; Ctrl+Enter is the one worth learning, since
-  -- it is what a graphical database IDE uses and it works in insert mode too.
+  -- `<leader>S` was the first: snacks owns it as "Select Scratch Buffer", so
+  -- the key advertised for Run opened a picker in every buffer but these two.
+  --
+  -- `]p`, `[p` and `R` were the second, and worse, because they are not
+  -- mappings at all -- they are **built-in Vim commands**. `]p` and `[p` put
+  -- with the indent adjusted, and `R` enters Replace mode. Shadowing those in
+  -- the pane where you *edit* SQL means pressing R to replace a word re-ran
+  -- the query instead.
+  --
+  -- Alt with the arrows and Home reads as paging, is free in Vim and in
+  -- LazyVim, and shadows nothing. Ctrl+Enter is Run, which is what a
+  -- graphical database IDE uses and works in insert mode too.
   local keys = {
     ["<leader>Dr"] = { function() M.run_current() end, "Run the statement" },
-    ["]p"] = { function() M.turn_page(1) end, "Next page" },
-    ["[p"] = { function() M.turn_page(-1) end, "Previous page" },
-    ["[P"] = { function() M.first_page() end, "First page" },
-    ["R"] = { function() M.refresh() end, "Re-run this page" },
+    -- dadbod-ui binds <leader>S in a sql buffer once it is loaded, which is
+    -- exactly when this pane exists -- and its execute opens a result window
+    -- of its own, so pressing it here would leave two. Ours is set after the
+    -- filetype is, so ours wins; it is not *advertised* anywhere, because
+    -- outside these two panes the same key is snacks' scratch-buffer picker.
+    ["<leader>S"] = { function() M.run_current() end, "Run the statement" },
+    ["<A-Right>"] = { function() M.turn_page(1) end, "Next page of rows" },
+    ["<A-Left>"] = { function() M.turn_page(-1) end, "Previous page of rows" },
+    ["<A-Home>"] = { function() M.first_page() end, "First page of rows" },
+    ["<A-r>"] = { function() M.refresh() end, "Re-run this page" },
   }
   for lhs, spec in pairs(keys) do
     vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })

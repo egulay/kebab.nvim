@@ -259,23 +259,103 @@ H.describe("paging the rows", function()
     }
     local rows, info = I.split_footer(lines)
     H.eq(5, #rows, "the footer line should not be shown")
-    H.eq({ offset = 0, shown = 100, more = true }, info)
+    H.eq({ kind = "page", offset = 0, shown = 100, more = true }, info)
     local _, none = I.split_footer({ "(1 row)" })
     H.eq(nil, none, "output with no footer is not a page")
   end)
 
+  H.it("asks the server for the page, not the whole table", function()
+    -- The first version of paging read every row and skipped them on the
+    -- client, so page 50 pulled five thousand rows to show a hundred. That is
+    -- a workaround, not paging.
+    local D = require("kebab.db")
+    H.eq("select * from (select * from t) kebab_page limit 100 offset 200",
+      D.page_sql("jdbc:postgresql://h/d", "select * from t", 200, 100))
+    H.eq("select * from (select * from t) kebab_page limit 100 offset 200",
+      D.page_sql("jdbc:sqlite:/x.db", "select * from t", 200, 100))
+    -- SQL Server and Oracle spell it differently, and SQL Server refuses
+    -- OFFSET without an ORDER BY to attach it to
+    H.matches("order by %(select null%) offset 200 rows fetch next 100 rows only",
+      D.page_sql("jdbc:sqlserver://h;database=d", "select * from t", 200, 100))
+    H.matches("offset 200 rows fetch next 100 rows only",
+      D.page_sql("jdbc:oracle:thin:@h/x", "select * from t", 200, 100))
+  end)
+
+  H.it("does not let a statement's own semicolon land inside the wrap", function()
+    local D = require("kebab.db")
+    H.eq("select * from (select 1) kebab_page limit 10 offset 0",
+      D.page_sql("jdbc:sqlite:/x.db", "select 1;  ", 0, 10))
+  end)
+
+  H.it("survives a percent sign in the statement", function()
+    -- gsub treats % in a *replacement* as an escape, and a LIKE pattern is
+    -- full of them. The substitution passes a function for that reason.
+    local D = require("kebab.db")
+    H.matches("like '%%ada%%'", D.page_sql("jdbc:sqlite:/x.db", "select * from t where n like '%ada%'", 0, 5))
+  end)
+
+  H.it("pages the rows themselves, not just the header", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local function span()
+      local lines = vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false)
+      local first, last
+      for _, line in ipairs(lines) do
+        local text = line:match("^%d+%s+| (row %d+)")
+        if text then
+          first = first or text
+          last = text
+        end
+      end
+      return first, last
+    end
+    local first, last = span()
+    H.eq("row 1", first)
+    H.eq("row 100", last)
+    I.turn_page(1)
+    first, last = span()
+    H.eq("row 101", first, "the second page must hold the second hundred rows")
+    H.eq("row 200", last)
+    I.turn_page(1)
+    first, last = span()
+    H.eq("row 201", first)
+    H.eq("row 250", last, "and the last page stops at the end")
+  end)
+
+  H.it("knows there is a next page without counting the table", function()
+    -- One row beyond the page is requested and not shown; that leftover is the
+    -- whole answer. Asking for exactly `size` rows made `more` false on every
+    -- page, so Next refused to move while the header said "page 1 of 100".
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local pager = I.pager(c.url)
+    H.ok(pager.info.more, "page 1 of 250 rows has a next page")
+    H.eq(100, pager.info.shown, "and shows one page, not one page plus the probe row")
+    H.eq("cursor", pager.info.kind, "the result set is held open, and the batch came off it")
+  end)
+
   H.it("says where you are", function()
     local c = { name = "shop", url = "jdbc:sqlite:/tmp/x.db" }
-    H.matches("rows 1%-100 of more", I.pager_line(c, { offset = 0, shown = 100, more = true }))
-    H.matches("page 1", I.pager_line(c, { offset = 0, shown = 100, more = true }))
-    H.matches("rows 101%-150 of 150", I.pager_line(c, { offset = 100, shown = 50, more = false }))
-    H.matches("page 2", I.pager_line(c, { offset = 100, shown = 50, more = false }))
-    -- Spelled out as keystrokes, not as "]p": the line is on screen.
-    local line = I.pager_line(c, { offset = 0, shown = 1, more = false })
-    H.matches("next: %] p", line, "the keys belong on screen, as keys: " .. line)
-    H.matches("back: %[ p", line)
-    H.matches("re%-run: R", line)
-    H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
+    H.matches("rows 1%-100 of more", (I.pager_line(c, { offset = 0, shown = 100, more = true })))
+    H.matches("page 1", (I.pager_line(c, { offset = 0, shown = 100, more = true })))
+    H.matches("rows 101%-150 of 150", (I.pager_line(c, { offset = 100, shown = 50, more = false })))
+    H.matches("page 2", (I.pager_line(c, { offset = 100, shown = 50, more = false })))
+    -- Two lines: position, then the keys. Spelled out as keystrokes, and on
+    -- keys that are free -- `]p`, `[p` and `R` are built-in Vim commands and
+    -- the first version shadowed all three in the pane where you edit SQL.
+    local where, how = I.pager_line(c, { offset = 0, shown = 1, more = false })
+    H.matches("rows 1%-1 of 1", where)
+    H.matches("next Alt%+Right", how, "the keys belong on screen, as keys: " .. how)
+    H.matches("back Alt%+Left", how)
+    H.matches("re%-run Alt%+r", how)
+    H.matches("run Ctrl%+Enter", how)
+    for _, line in ipairs({ where, how }) do
+      H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
+    end
   end)
 
   H.it("shows one page, not the whole table", function()
@@ -300,6 +380,71 @@ H.describe("paging the rows", function()
     local statement = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
     H.ok(not statement:lower():match("limit"),
       "the select shown should be the one you would have written: " .. statement)
+  end)
+
+  H.it("runs the statement once and pages off the held result set", function()
+    -- The difference between paging and a workaround, and the reason this is
+    -- how every SQL editor does it: with the result set held open, the pages
+    -- are a snapshot. Re-running the statement per page with LIMIT/OFFSET
+    -- executes the whole query again each time *and* shifts the pages under
+    -- you whenever anyone else writes to the table.
+    requires_jdbc()
+    vim.cmd("only")
+    local file = H.tmpdir("dbide-snapshot") .. "/snap.sqlite"
+    -- WAL, so another connection may write while a read is open
+    local setup = "pragma journal_mode=wal;\ncreate table t (id integer primary key, label text);\n"
+    local rows = {}
+    for i = 1, 250 do
+      rows[#rows + 1] = ("insert into t (id,label) values (%d,'row %d');"):format(i, i)
+    end
+    H.eq(0, vim.system({ "sqlite3", file }, { stdin = setup .. table.concat(rows, "\n"), text = true })
+      :wait(60000).code)
+
+    local c = { name = "snap", url = "jdbc:sqlite:" .. file }
+    I.layout(c)
+    I.run(c, "select * from t order by id")
+
+    local function span()
+      local first, last
+      for _, line in ipairs(vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false)) do
+        local text = line:match("^%d+%s+| (row %d+)")
+        if text then
+          first = first or text
+          last = text
+        end
+      end
+      return first, last
+    end
+
+    local first, last = span()
+    H.eq("row 1", first)
+    H.eq("row 100", last)
+    H.eq("cursor", I.pager(c.url).info.kind, "the result set should be held open")
+
+    -- somebody else deletes a row from the first page
+    H.eq(0, vim.system({ "sqlite3", file }, { stdin = "delete from t where id = 50;", text = true })
+      :wait(30000).code)
+
+    I.turn_page(1)
+    first, last = span()
+    H.eq("row 101", first,
+      "a held cursor pages its own snapshot; a re-queried page would start at row 102")
+    H.eq("row 200", last)
+  end)
+
+  H.it("goes back without asking the database again", function()
+    -- A forward-only result set cannot be rewound, so the pages already
+    -- fetched are kept. That is also why going back is instant.
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    I.turn_page(1)
+    local pager = I.pager(c.url)
+    H.eq(2, pager.fetched, "two pages fetched")
+    I.turn_page(-1)
+    H.eq(2, I.pager(c.url).fetched, "going back must not fetch a third time")
+    H.matches("rows 1%-100", header())
   end)
 
   H.it("walks forward and back", function()
@@ -358,7 +503,8 @@ H.describe("paging the rows", function()
       for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
         keys[m.lhs] = true
       end
-      for _, lhs in ipairs({ "]p", "[p", "[P", "R" }) do
+      -- Neovim stores <A-x> as <M-x>, so that is what a keymap lookup sees.
+      for _, lhs in ipairs({ "<M-Right>", "<M-Left>", "<M-Home>", "<M-r>", "<C-CR>" }) do
         H.ok(keys[lhs], ("%s should be mapped in buffer %d"):format(lhs, buf))
       end
     end
@@ -413,14 +559,35 @@ H.describe("running a statement from the editor", function()
     end)
   end)
 
-  H.it("binds its own execute key in the statement pane", function()
+  H.it("binds its own execute keys in the statement pane", function()
+    -- Buffer-local, so they beat the global ones -- dadbod's own exec would
+    -- open a second result window. Not <leader>S, which snacks owns as
+    -- "Select Scratch Buffer", and not R, which is Replace mode.
     requires_jdbc()
     vim.cmd("only")
     I.layout(fixture())
-    local found = false
+    local lhs = {}
     for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
-      if m.lhs == " S" then found = true end
+      lhs[m.lhs] = true
     end
-    H.ok(found, "<leader>S should be buffer-local here, so it beats dadbod's own")
+    H.ok(lhs["<C-CR>"], "Ctrl+Enter should run the statement")
+    H.ok(lhs[" Dr"], "and so should the leader key in the database namespace")
+    -- <leader>S is bound here too, but to *ours*: dadbod-ui takes that key in
+    -- any sql buffer and its execute opens a second result window. It is not
+    -- advertised, because outside these panes the same key is snacks'
+    -- scratch-buffer picker -- which is what the user got when they pressed it.
+    local ours = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+      ours[m.lhs] = m.desc
+    end
+    H.eq("Run the statement", ours[" S"], "if that key is live here it must run the statement")
+    H.ok(not lhs["R"], "R is Replace mode; the pager must not shadow it in an editor pane")
+    -- insert mode too, so a query can be run without leaving the mode it was
+    -- typed in
+    local imaps = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "i")) do
+      imaps[m.lhs] = true
+    end
+    H.ok(imaps["<C-CR>"], "Ctrl+Enter should work while typing")
   end)
 end)

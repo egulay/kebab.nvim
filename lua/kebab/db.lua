@@ -383,12 +383,89 @@ end
 -- How each dialect spells "the first N rows", and what it quotes identifiers
 -- with. The names come straight from the driver's catalog, so they are in the
 -- server's own case and may be reserved words -- quoting them is not optional.
+-- How each database is asked for one page.
+--
+-- Spelled out per driver, every one of them, rather than as a table of
+-- exceptions over a silent default. The default version was indefensible on
+-- sight: reading it you could not tell whether PostgreSQL was handled (it was,
+-- through the default) and a driver added later would inherit LIMIT/OFFSET
+-- whether or not that is its syntax -- Firebird wants `ROWS`, DB2 `FETCH
+-- FIRST`, Oracle before 12c needed a ROWNUM subquery. That is a decision, and
+-- it should not be made by omission. `paging_spec` fails if a registered
+-- driver has no entry here.
+--
+-- Placeholders are named because Lua's string.format has no positional
+-- arguments and the clauses want them in different orders.
+--
+-- The statement is wrapped rather than extended --
+-- `select * from ( <theirs> ) kebab_page <clause>` -- so a query the user
+-- wrote keeps its own LIMIT, ORDER BY, CTE or UNION intact.
+local LIMIT_OFFSET = "select * from ({sql}) kebab_page limit {size} offset {offset}"
+local OFFSET_FETCH = "select * from ({sql}) kebab_page offset {offset} rows fetch next {size} rows only"
+
+local PAGING = {
+  -- LIMIT n OFFSET m: what each of these documents
+  postgresql = LIMIT_OFFSET,
+  sqlite = LIMIT_OFFSET,
+  mysql = LIMIT_OFFSET,
+  mariadb = LIMIT_OFFSET,
+  h2 = LIMIT_OFFSET,
+  duckdb = LIMIT_OFFSET,
+  clickhouse = LIMIT_OFFSET,
+  -- OFFSET m ROWS FETCH NEXT n ROWS ONLY: the SQL:2008 spelling
+  oracle = OFFSET_FETCH, -- 12c and later; earlier needs a ROWNUM subquery
+  -- SQL Server refuses OFFSET without an ORDER BY to attach it to, and the
+  -- statement being wrapped may not have one. `(select null)` is the
+  -- documented way to say "no particular order" and costs nothing.
+  sqlserver = "select * from ({sql}) kebab_page order by (select null) offset {offset} rows fetch next {size} rows only",
+}
+
 local DIALECTS = {
   oracle = { quote = '"', tail = "fetch first %d rows only" },
   sqlserver = { quote = "[", head = "top (%d) " },
   mysql = { quote = "`" },
   mariadb = { quote = "`" },
 }
+
+---Which databases this layer can ask for a page.
+---@return string[] subprotocols
+function M.paging_dialects()
+  return vim.tbl_keys(PAGING)
+end
+
+---A statement that asks the server for one page of `sql`.
+---
+---Server-side on purpose. The first version of paging read the whole result
+---set and skipped rows on the client, so page 50 of a hundred-row page size
+---pulled five thousand rows across the connection to show a hundred -- a
+---workaround, not paging.
+---
+---nil for a database with no entry above, which is not a failure: kebab.dbide
+---then pages on the cursor instead, which is slower, dialect-free and always
+---correct.
+---@param url string
+---@param sql string the statement to page
+---@param offset number rows to skip
+---@param size number rows to return
+---@return string|nil
+function M.page_sql(url, sql, offset, size)
+  local template = PAGING[jdbc.subprotocol(url) or ""]
+  if not template then
+    return nil
+  end
+  -- a trailing semicolon or whitespace would land inside the parentheses
+  local inner = (sql:gsub("%s*;%s*$", ""))
+  local values = {
+    sql = inner,
+    offset = tostring(math.floor(offset)),
+    size = tostring(math.floor(size)),
+  }
+  -- a function replacement, because gsub treats % in a replacement *string*
+  -- as an escape and a statement is full of them
+  return (template:gsub("{(%w+)}", function(key)
+    return values[key] or ("{" .. key .. "}")
+  end))
+end
 
 ---Quote one dotted catalog identifier for a dialect: schema.name -> "schema"."name".
 ---@param name string
