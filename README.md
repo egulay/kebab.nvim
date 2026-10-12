@@ -362,6 +362,16 @@ vim.g.kebab_open_external = {
 }
 ```
 
+Set it in `lua/config/options.lua`, which Neovim reads before the plugins
+load. The tree's double click reads the setting live, but the `BufReadCmd` for
+the other ways of opening a file is registered once at startup from the list as
+it stood then — so if you add an extension later in a session, re-register it:
+
+```lua
+vim.g.kebab_open_external = { extensions = { "kra" } }
+require("kebab.openexternal").setup()   -- idempotent
+```
+
 `kebab doctor` reports a missing `xdg-open` and what it costs.
 
 ## Adding a language

@@ -294,6 +294,12 @@ end
 
 ---Register the autocmds.
 ---
+---Idempotent, and it has to be called again by anyone who adds an extension
+---after startup: the pattern list is fixed when the autocmd is created, so a
+---later `vim.g.kebab_open_external.extensions` is seen by the tree's own open
+---path (which reads the config live) and not by this. The documented place for
+---the setting is `lua/config/options.lua`, which is read before any plugin.
+---
 ---`BufReadCmd` rather than `BufReadPre`: it replaces the read entirely, so the
 ---bytes of a 4 GB video are never loaded to decide not to look at them. The
 ---pattern list is the extensions, which is why the content sniff cannot apply
