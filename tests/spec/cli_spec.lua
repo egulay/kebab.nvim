@@ -295,6 +295,20 @@ H.describe("kebab doctor", function()
     end)
   end
 
+  H.it("prints no key specification jargon", function()
+    -- doctor is read on screen like everything else: "<leader>gg" is not
+    -- something a person presses.
+    local bad = {}
+    for _, check in ipairs(checks) do
+      for _, field in ipairs({ check.detail, check.why, check.hint, check.without }) do
+        if type(field) == "string" and field:lower():find("leader") then
+          bad[#bad + 1] = check.name .. ": " .. field
+        end
+      end
+    end
+    H.eq({}, bad, "say what the user presses")
+  end)
+
   H.it("groups by who owns the version", function()
     -- The split the whole layer is built on: the editor owns its own tooling,
     -- the project owns its toolchain versions.

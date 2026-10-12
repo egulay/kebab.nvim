@@ -391,7 +391,8 @@ local OPTIONAL = {
   },
   {
     exe = "lazygit",
-    why = "the git UI behind <leader>gg",
+    -- doctor prints this; `<leader>gg` is not something a person presses
+    why = "the git UI behind Space → g → g",
     without = "that one keybinding; diffview and gitsigns are unaffected",
   },
 }
