@@ -82,9 +82,13 @@ test -f "$XDG_CONFIG_HOME/nvim/lua/plugins/kebab.lua" \
 test -x "$work/.local/bin/kebab" \
   || fail "setup.sh did not put kebab on PATH"
 
-# Deterministic, not well equipped: mason's installs are abandoned when this
-# editor exits, and what survives differs every run. @see plugins/mason.lua
-export KEBAB_NO_MASON_INSTALL=1
+# A short, known list -- and then we wait for it. Mason's installs are
+# abandoned when the editor exits and what survives differs every run; but
+# installing *nothing* is worse, because then nothing enables the language
+# server either and the specs that need one wait out their whole attach
+# budget. gopls is the only server the suite actually needs.
+# @see lua/kebab/plugins/mason.lua
+export KEBAB_MASON_ONLY="${KEBAB_MASON_ONLY-gopls}"
 
 say "installing the plugins (this is where a bad pin shows up)"
 nvim --headless -n "+Lazy! sync" +qa 2>&1 | tail -20
@@ -99,6 +103,45 @@ printf 'plugins installed: %s\n' "$(grep -c '": {' "$XDG_CONFIG_HOME/nvim/lazy-l
 # specs wait out their 120s attach budget and fail with "no language server
 # attached", which names neither mason nor the install it aborted. Anything in
 # there that cannot answer `--version` is removed.
+# Wait for it, rather than racing it. A suite that starts while mason is still
+# installing tests the race, not the layer.
+say "letting mason finish (KEBAB_MASON_ONLY=${KEBAB_MASON_ONLY:-<everything>})"
+nvim --headless -n -c 'lua
+  local ok, registry = pcall(require, "mason-registry")
+  if not ok then
+    print("mason-registry is not available")
+    return vim.cmd("qa!")
+  end
+  local budget = tonumber(vim.env.KEBAB_MASON_BUDGET_MS) or 420000
+  local deadline = vim.uv.now() + budget
+  local function installing()
+    local names = {}
+    for _, name in ipairs(registry.get_all_package_names()) do
+      local okp, pkg = pcall(registry.get_package, name)
+      if okp and pkg:is_installing() then
+        names[#names + 1] = name
+      end
+    end
+    return names
+  end
+  local last = ""
+  while vim.uv.now() < deadline do
+    local busy = installing()
+    if #busy == 0 then
+      break
+    end
+    local now = table.concat(busy, ",")
+    if now ~= last then
+      print("installing: " .. now)
+      last = now
+    end
+    vim.wait(2000, function() return false end)
+  end
+  local left = installing()
+  print(#left == 0 and "mason is idle" or ("still installing: " .. table.concat(left, ",")))
+  vim.cmd("qa!")
+' 2>&1 | tail -5
+
 say "pruning anything mason left half-installed"
 pruned=0
 for binary in "$XDG_DATA_HOME"/nvim/mason/bin/*; do

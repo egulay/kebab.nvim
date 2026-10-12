@@ -211,14 +211,18 @@ H.describe("the .http client", function()
   end)
 end)
 
--- Mason's install list, and the one environment that must not have it.
+-- Mason's install list, and the knob a repeatable run needs.
 --
 -- `nvim --headless "+Lazy! sync" +qa` exits while mason is still installing --
 -- fourteen packages on the clean-machine run that found this -- so which tools
 -- exist while a suite runs depends on what finished in those few seconds. That
--- differs by run, machine and network, and it produced a real failure: a
--- half-installed gopls shadowing a working one, because mason prepends its bin
--- directory to PATH.
+-- produced a real failure: a half-installed gopls shadowing a working one,
+-- because mason prepends its bin directory to PATH.
+--
+-- Emptying the list was the first attempt and it was worse: with mason
+-- managing nothing, nothing *enables* the language server either, so eleven
+-- specs waited out a 120s attach budget against a gopls sitting unused on
+-- PATH. So the knob narrows rather than empties.
 H.describe("mason's package list", function()
   local function ensure_installed()
     local spec = dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/mason.lua")
@@ -230,22 +234,60 @@ H.describe("mason's package list", function()
     error("the mason fragment is gone")
   end
 
+  ---@param value string|nil what KEBAB_MASON_ONLY should be during the call
+  local function with_only(value, fn)
+    local saved = vim.env.KEBAB_MASON_ONLY
+    vim.env.KEBAB_MASON_ONLY = value
+    local ok, err = pcall(fn)
+    vim.env.KEBAB_MASON_ONLY = saved
+    if not ok then
+      error(err, 0)
+    end
+  end
+
   H.it("comes from the languages, not from a list written here", function()
-    local saved = vim.env.KEBAB_NO_MASON_INSTALL
-    vim.env.KEBAB_NO_MASON_INSTALL = nil
-    local tools = ensure_installed()
-    vim.env.KEBAB_NO_MASON_INSTALL = saved
-    H.ok(#tools > 20, "expected the languages' tools, got " .. #tools)
-    H.ok(vim.tbl_contains(tools, "jdtls"), "jdtls should be in there")
+    with_only(nil, function()
+      local tools = ensure_installed()
+      H.ok(#tools > 20, "expected the languages' tools, got " .. #tools)
+      H.ok(vim.tbl_contains(tools, "jdtls"), "jdtls should be in there")
+    end)
   end)
 
-  H.it("is empty when a run asks for determinism instead", function()
-    local saved = vim.env.KEBAB_NO_MASON_INSTALL
-    vim.env.KEBAB_NO_MASON_INSTALL = "1"
-    local tools = ensure_installed()
-    vim.env.KEBAB_NO_MASON_INSTALL = saved
-    H.eq({}, tools,
-      "KEBAB_NO_MASON_INSTALL=1 has to leave nothing to install, or a suite "
-        .. "runs against whatever happened to finish")
+  H.it("narrows to what a repeatable run asked for", function()
+    with_only("gopls", function()
+      H.eq({ "gopls" }, ensure_installed(),
+        "a run that waits for mason wants a list it can wait for")
+    end)
+    -- and it *replaces*: opts arrives carrying LazyVim's extras' packages, so
+    -- appending left nine of those installing while the one server the suite
+    -- needs had been removed
+    local spec = dofile(_G.KEBAB_TEST.root .. "/lua/kebab/plugins/mason.lua")
+    for _, fragment in ipairs(spec) do
+      if fragment[1] == "mason-org/mason.nvim" then
+        with_only("gopls", function()
+          H.eq({ "gopls" }, fragment.opts(nil, { ensure_installed = { "delve", "prettier" } }).ensure_installed,
+            "whatever LazyVim put there must not survive the narrowing")
+        end)
+      end
+    end
+    with_only("gopls, basedpyright", function()
+      H.eq({ "gopls", "basedpyright" }, ensure_installed(), "a comma list, spaces allowed")
+    end)
+  end)
+
+  H.it("treats an empty value as unset, because vim.env cannot tell", function()
+    -- `vim.env.X` reads an empty variable as **nil** -- even when the shell
+    -- exported it empty (`KEBAB_MASON_ONLY= nvim` arrives as nil), while
+    -- `vim.fn.environ()` shows "". So "set but empty" is not expressible
+    -- here, and the same quirk is why $KEBAB_PROJECT_ROOTS="" falls through
+    -- to the defaults rather than meaning "no roots".
+    --
+    -- No loss: installing nothing was tried and was worse than installing a
+    -- short list, because with mason managing nothing the language server is
+    -- never enabled either.
+    with_only("", function()
+      local tools = ensure_installed()
+      H.ok(#tools > 20, "an empty value falls through to the full list, got " .. #tools)
+    end)
   end)
 end)
