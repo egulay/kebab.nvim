@@ -303,6 +303,29 @@ store -- so indentation, expand arrows and whichever glyphs the Nerd Font
 happens to have are all irrelevant, and "New query" or "Saved queries (0)"
 cannot be mistaken for a table.
 
+### The four menus
+
+`plugins/menu.lua` picks by filetype, because a menu whose entries are about
+something other than what you clicked is worse than no menu:
+
+| where you click | menu | why |
+|---|---|---|
+| the file tree | `menus/tree.lua` | files and git, acting on the clicked node |
+| the data source tree | `menus/dbtree.lua` | the table or connection under the pointer |
+| a SQL or result buffer | `menus/sql.lua` | Run at the top level, then the pager |
+| anywhere else | `menus/editor.lua` | the menu bar: Project, File, Edit, Code, Run, Git, View |
+
+The last three each end with the editor menu's own sections appended, so
+switching menus never takes anything away.
+
+Two mistakes worth not repeating. A table of functions parked on a menu's list
+(`menu.actions = {...}`) made the plugin index a function and the tree menu
+never opened at all -- helpers hang off a metatable now, and `menu_open_spec`
+opens every menu and asserts its entries were drawn. And an entry that
+advertises a key must declare it canonically (`<leader>Dq`), not as the text a
+person reads ("Space D q"): `kebab.keys.humanise` produces the second from the
+first, and the sweep checks the first against the real mappings.
+
 ## `cli.lua` + `bin/kebab`
 
 Opening and creating projects from the shell, so the IDE starts like `code .`

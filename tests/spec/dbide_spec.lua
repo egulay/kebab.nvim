@@ -580,6 +580,109 @@ H.describe("paging the rows", function()
   end)
 end)
 
+H.describe("the data source tree's own menu", function()
+  -- Right-clicking a table and being offered "Browse Tables...", which then
+  -- asks which table, is the editor menu being shown in the wrong place. Every
+  -- entry in the tree's menu acts on the node under the cursor, resolved by
+  -- the same function the double click uses so the two cannot disagree.
+  local D = require("kebab.db")
+
+  local function fake_tree(lines)
+    vim.cmd("enew!")
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+    vim.bo.filetype = "dbui"
+  end
+
+  H.it("answers nothing outside the tree", function()
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    H.eq(nil, I.node_at_cursor())
+  end)
+
+  H.it("resolves the connection and the table under the cursor", function()
+    requires_jdbc()
+    local saved = vim.g.kebab_db_store
+    vim.g.kebab_db_store = H.tmpdir("dbtree-store") .. "/connections.json"
+    local c = fixture()
+    H.ok(D.save({ c }))
+    -- warm the table list so the resolution does not need a round trip
+    D.tables(c)
+
+    fake_tree({
+      '" Press ? for help',
+      "",
+      ("▾ 󰆼 %s ✓"):format(c.name),
+      "    󰓰 New query",
+      "  ▾ 󰓱 Tables (2)",
+      "    ▸  customers",
+      "    ▸  orders",
+    })
+
+    vim.api.nvim_win_set_cursor(0, { 3, 0 })
+    local node = I.node_at_cursor()
+    H.ok(node, "the connection line should resolve")
+    H.eq(c.name, node.connection.name)
+    H.eq(nil, node.table, "a connection line is not a table")
+
+    vim.api.nvim_win_set_cursor(0, { 4, 0 })
+    H.eq(true, I.node_at_cursor().new_query, "dadbod-ui's own node is recognised")
+
+    vim.api.nvim_win_set_cursor(0, { 6, 0 })
+    local on_table = I.node_at_cursor()
+    H.eq("customers", on_table.table)
+    H.eq(c.name, on_table.connection.name)
+
+    vim.api.nvim_win_set_cursor(0, { 7, 0 })
+    H.eq("orders", I.node_at_cursor().table, "and the second table is not the first")
+
+    vim.api.nvim_win_set_cursor(0, { 5, 0 })
+    H.eq(nil, I.node_at_cursor().table, "the Tables group is not a table")
+
+    vim.g.kebab_db_store = saved
+  end)
+
+  H.it("has an entry for the table and an entry for the connection", function()
+    local menu = require("kebab.menus.dbtree")
+    local names = {}
+    local function walk(items)
+      for _, e in ipairs(items) do
+        if e.items then
+          walk(e.items)
+        elseif e.name ~= "separator" then
+          names[e.name] = true
+        end
+      end
+    end
+    walk(menu)
+    for _, wanted in ipairs({
+      "Open the Rows",
+      "Structure (columns, keys, indexes)",
+      "Count the Rows",
+      "Copy the Table's Name",
+      "New Statement Here",
+      "Test This Connection",
+    }) do
+      H.ok(names[wanted], ("the tree menu should offer %q"):format(wanted))
+    end
+    -- and it keeps the rest of the editor menu, so nothing is lost by the swap
+    H.ok(names["New Project..."], "the editor sections should still be there")
+  end)
+
+  H.it("shows what a person presses, not a key specification", function()
+    local menu = require("kebab.menus.dbtree")
+    local function walk(items)
+      for _, e in ipairs(items) do
+        if e.items then
+          walk(e.items)
+        elseif e.rtxt then
+          H.ok(not e.rtxt:find("<"), ("%s shows %q"):format(e.name, e.rtxt))
+        end
+      end
+    end
+    walk(menu)
+  end)
+end)
+
 H.describe("what the database will do with it", function()
   -- The point of a plan when you are reading somebody else's database: a
   -- sequential scan where you expected an index answers both "why is this

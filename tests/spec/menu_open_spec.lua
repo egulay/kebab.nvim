@@ -12,7 +12,7 @@
 -- entries. This spec fails if that is undone, for any menu.
 local H = ...
 
-local MENUS = { "kebab.menus.editor", "kebab.menus.tree", "kebab.menus.sql" }
+local MENUS = { "kebab.menus.editor", "kebab.menus.tree", "kebab.menus.sql", "kebab.menus.dbtree" }
 
 local function floats()
   local out = {}

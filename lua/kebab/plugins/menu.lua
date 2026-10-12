@@ -18,8 +18,13 @@ return {
           -- down under "Database", which is not where anyone looks after
           -- editing a query. The rows pane gets it too: that is where you are
           -- when you want the next page.
-          local SQL = { sql = true, dbout = true, dbui = true, mysql = true, plsql = true }
+          -- The data source tree gets its own menu, because every entry
+          -- there is about the node under the pointer: right-clicking a table
+          -- and being offered "Browse Tables..." -- which then asks which
+          -- table -- is the editor menu being shown in the wrong place.
+          local SQL = { sql = true, dbout = true, mysql = true, plsql = true }
           local which = ft == "neo-tree" and "kebab.menus.tree"
+            or (ft == "dbui" and "kebab.menus.dbtree")
             or (SQL[ft] and "kebab.menus.sql")
             or "kebab.menus.editor"
           require("menu").open(require(which), { mouse = true })

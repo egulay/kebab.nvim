@@ -1273,6 +1273,57 @@ function M.connection_above(lines, row, names)
   return nil
 end
 
+---The connection and table the cursor is on, in the data source tree.
+---
+---Shared by the double click and the right-click menu: both need "what did
+---they point at", and resolving it twice would let them disagree.
+---@return table|nil node { connection, table? }
+function M.node_at_cursor()
+  if vim.bo.filetype ~= "dbui" then
+    return nil
+  end
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local saved, err = db.connections()
+  if err or #saved == 0 then
+    return nil
+  end
+  local names = vim.tbl_map(function(c) return c.name end, saved)
+  local name = M.connection_above(lines, row, names)
+  if not name then
+    return nil
+  end
+  local c = db.connection(name)
+  if not c then
+    return nil
+  end
+  local line = lines[row] or ""
+  -- "New query" is dadbod-ui's own node, not a table
+  if vim.trim((line:gsub("^[^%w_]*", ""))) == "New query" then
+    return { connection = c, new_query = true }
+  end
+  local tables = require("kebab.dbcomplete").table_names(c.url)
+  if #tables == 0 then
+    tables = db.tables(c) or {}
+  end
+  return { connection = c, table = M.table_on_line(line, tables) }
+end
+
+---Open a new, empty statement for a connection, in the statement pane.
+---@param c kebab.DbConnection
+function M.new_query(c)
+  local layout = M.layout(c)
+  if not layout.editor then
+    return false
+  end
+  local buf = vim.api.nvim_win_get_buf(layout.editor)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { ("-- %s"):format(c.name), "", "" })
+  pcall(vim.api.nvim_win_set_cursor, layout.editor, { 2, 0 })
+  vim.api.nvim_set_current_win(layout.editor)
+  vim.cmd("startinsert")
+  return true
+end
+
 ---What a double click in the tree should do.
 ---
 ---A table opens in the layout; anything else falls through to dadbod-ui's own
@@ -1281,54 +1332,22 @@ function M.click()
   local function fallback()
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Plug>(DBUI_SelectLine)", true, false, true), "mx", false)
   end
-  if vim.bo.filetype ~= "dbui" then
+  local node = M.node_at_cursor()
+  if not node then
     return fallback()
   end
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local row = vim.api.nvim_win_get_cursor(0)[1]
-  local saved, err = db.connections()
-  if err or #saved == 0 then
-    return fallback()
-  end
-  local names = vim.tbl_map(function(c) return c.name end, saved)
-  local name = M.connection_above(lines, row, names)
-  if not name then
-    return fallback()
-  end
-  local c = db.connection(name)
-  if not c then
-    return fallback()
-  end
-
   -- "New query" is dadbod-ui's own node, and its action opens a buffer in
   -- whichever window dadbod-ui feels like using -- which is how a three-pane
   -- layout ends up with the statement open twice and the tree gone. Give it
   -- the statement pane instead, which is where a new query belongs.
-  local line = vim.trim(((lines[row] or ""):gsub("^[^%w_]*", "")))
-  if line == "New query" then
-    local layout = M.layout(c)
-    if layout.editor then
-      local buf = vim.api.nvim_win_get_buf(layout.editor)
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { ("-- %s"):format(c.name), "", "" })
-      pcall(vim.api.nvim_win_set_cursor, layout.editor, { 2, 0 })
-      vim.api.nvim_set_current_win(layout.editor)
-      vim.cmd("startinsert")
-    end
+  if node.new_query then
+    M.new_query(node.connection)
     return
   end
-  -- The completion cache usually has the list already, which costs nothing.
-  -- When it does not -- expanding a connection in the tree does not populate
-  -- it -- ask the database, because falling back to dadbod-ui's expansion here
-  -- is exactly the behaviour being replaced.
-  local tables = require("kebab.dbcomplete").table_names(c.url)
-  if #tables == 0 then
-    tables = db.tables(c) or {}
-  end
-  local table_name = M.table_on_line(lines[row] or "", tables)
-  if not table_name then
+  if not node.table then
     return fallback()
   end
-  M.open_table(c, table_name)
+  M.open_table(node.connection, node.table)
 end
 
 return M

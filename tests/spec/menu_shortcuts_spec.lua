@@ -46,6 +46,8 @@ local BUFFER_LOCAL = {
   ["<leader>DR"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>Dx"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>DX"] = "kebab.dbide: bound on the statement and rows panes",
+  -- dadbod-ui's own, bound on its tree buffer
+  ["R"] = "vim-dadbod-ui: bound on the data source tree",
   ["<leader>ca"] = "LSP: bound on LspAttach",
   ["<leader>cr"] = "LSP: bound on LspAttach",
   ["gd"] = "LSP: bound on LspAttach",
@@ -123,6 +125,7 @@ for _, m in ipairs(menus) do
   walk(m.items, m.name .. " › ")
 end
 walk(require("kebab.menus.sql"), "sql › ")
+walk(require("kebab.menus.dbtree"), "dbtree › ")
 
 H.describe("menu shortcuts", function()
   H.it("every entry advertises one", function()

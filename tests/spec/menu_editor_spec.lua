@@ -129,6 +129,7 @@ end
 -- nothing checks. It is a flat list with leaves at the top level, so it is
 -- walked directly rather than per section.
 walk(require("kebab.menus.sql"), "sql", flat)
+walk(require("kebab.menus.dbtree"), "dbtree", flat)
 
 H.describe("editor menu", function()
   H.it("has the expected top-level menus", function()
