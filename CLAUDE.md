@@ -524,6 +524,17 @@ client attached, file contents reverted.
   `~/src` and friends, which most machines lack. Only a root the user
   named in `vim.g.kebab_project_roots` or `$KEBAB_PROJECT_ROOTS` is reported
   missing; an unreadable directory is always reported.
+- `kebab db` runs `nvim -c DBUI` **from a cold start**, so the dadbod-ui spec
+  needs `cmd` triggers -- it had only `keys`, and a command owned by a
+  keys-only spec does not exist until the key is pressed. Same trap as
+  `AerialToggle` and the Flutter entries, third time. A spec asserts
+  `exists(":DBUI") == 2`.
+- **Nothing can add to the editor's environment after Neovim has started**, so
+  the env file for a connection's `password_env` is sourced by `bin/kebab`
+  before it execs the editor (`--env`, or `$KEBAB_DB_ENV`). Doing it in Lua
+  would be too late. An unreadable env file is a hard error: starting anyway
+  opens the IDE with every connection failing to authenticate, which reads as
+  a broken database rather than a typo.
 - **A legacy timezone alias breaks every JDBC connection.** systemd accepts
   `timedatectl set-timezone Turkey`, the JVM reports that name verbatim in the
   PostgreSQL startup packet, and a server whose tzdata lacks the

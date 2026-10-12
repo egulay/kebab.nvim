@@ -20,6 +20,14 @@
 #   kebab new <name> --type <t> --no-open
 #                              create it and stop, without opening the editor
 #   kebab types [--prompts]    list the project types, and what each one asks
+#
+#   kebab db                   open the SQL IDE: the explorer, connections on
+#                              the left
+#   kebab db <connection>      open a SQL console on that saved connection
+#   kebab db [...] --env <f>   export a .env file first, so a connection whose
+#                              password_env it sets can connect. $KEBAB_DB_ENV
+#                              is used when --env is not given, which is what
+#                              makes `kebab db` alone enough.
 #   Semantic queries, for a caller that is not a person (an AI agent, a script).
 #   Read-only: none of these write to the working tree. Add --json for a
 #   machine-readable answer, and --exit-code to make `diagnostics` fail when it
@@ -273,6 +281,47 @@ case "$cmd" in
   open)
     shift
     run_editor "lua require('kebab.cli').open($(lua_str "${1-}"))"
+    ;;
+
+  db)
+    shift
+    # A password is never stored by this layer -- a connection names an
+    # environment variable -- so something has to put those variables in the
+    # environment before Neovim starts. Neovim inherits this shell's, which is
+    # why sourcing happens here and not in Lua.
+    conn=""
+    env_file="${KEBAB_DB_ENV:-}"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --env)
+          shift
+          [ $# -gt 0 ] || die "--env needs a file"
+          env_file=$1
+          shift
+          ;;
+        --env=*)
+          env_file=${1#--env=}
+          shift
+          ;;
+        -*) die "unknown option for db: $1" ;;
+        *)
+          [ -z "$conn" ] || die "only one connection can be named: $conn and $1"
+          conn=$1
+          shift
+          ;;
+      esac
+    done
+    if [ -n "$env_file" ]; then
+      # Expand ~ without the shell's glob or word splitting touching the rest.
+      case "$env_file" in "~/"*) env_file="$HOME/${env_file#\~/}" ;; esac
+      [ -f "$env_file" ] || die "no such env file: $env_file"
+      [ -r "$env_file" ] || die "cannot read env file: $env_file"
+      set -a
+      # shellcheck disable=SC1090
+      . "$env_file"
+      set +a
+    fi
+    run_editor "lua require('kebab.cli').db($(lua_str "$conn"))"
     ;;
 
   new)

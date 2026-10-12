@@ -569,8 +569,13 @@ function M.browse()
 end
 
 ---A new SQL buffer bound to a connection, the way a database IDE opens a console.
-function M.console()
-  M.current(function(c)
+---
+---With no connection it asks, or takes the one the current buffer is already
+---bound to. `kebab db <name>` passes one, so nothing is asked.
+---@param connection? kebab.DbConnection
+function M.console(connection)
+  local with = connection and function(cb) return cb(connection) end or M.current
+  with(function(c)
     local dir = vim.fn.stdpath("data") .. "/kebab/sql"
     vim.fn.mkdir(dir, "p")
     -- The loop used to leave `path` pointing at the 1000th *existing* file

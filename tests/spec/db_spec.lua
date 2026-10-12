@@ -41,6 +41,81 @@ local function fixture()
   return { name = "shop", url = fixture_url }
 end
 
+H.describe("`kebab db`", function()
+  local cli = require("kebab.cli")
+
+  local function with_connections(list, fn)
+    with_store(function()
+      H.ok(D.save(list))
+      fn()
+    end)
+  end
+
+  local sample = {
+    { name = "alpha", url = "jdbc:postgresql://localhost:5432/alpha", user = "a", password_env = "ALPHA_PW" },
+    { name = "alpha_reporting", url = "jdbc:postgresql://localhost:5432/rep", user = "r" },
+    { name = "beta", url = "jdbc:sqlite:/tmp/beta.db" },
+  }
+
+  H.it("resolves a connection by name, exact match winning", function()
+    with_connections(sample, function()
+      -- "alpha" also matches "alpha_reporting"; an exact name must not become
+      -- a two-way choice, or naming a connection precisely is useless.
+      H.eq({ "alpha" }, vim.tbl_map(function(c) return c.name end, cli.resolve_connection("alpha")))
+      H.eq({ "alpha", "alpha_reporting" },
+        vim.tbl_map(function(c) return c.name end, cli.resolve_connection("alph")))
+      H.eq({ "beta" }, vim.tbl_map(function(c) return c.name end, cli.resolve_connection("BETA")),
+        "matching should ignore case")
+      H.eq({}, cli.resolve_connection("nothing-like-this"))
+    end)
+  end)
+
+  H.it("says what to do when there are no connections at all", function()
+    with_store(function()
+      local notes = H.capture_notify(function() cli.db("") end)
+      H.eq(1, #notes)
+      H.matches("No database connections yet", notes[1].msg)
+      H.matches("IdeDbAdd", notes[1].msg, "it should say how to make one")
+      H.eq(vim.log.levels.WARN, notes[1].level)
+    end)
+  end)
+
+  H.it("names the real connections when the one asked for is unknown", function()
+    with_connections(sample, function()
+      local notes = H.capture_notify(function() cli.db("gamma") end)
+      H.eq(1, #notes)
+      H.matches("gamma", notes[1].msg)
+      for _, name in ipairs({ "alpha", "alpha_reporting", "beta" }) do
+        H.matches(name, notes[1].msg, "the list of real names should be in the message")
+      end
+      H.eq(vim.log.levels.ERROR, notes[1].level)
+    end)
+  end)
+
+  H.it("opens a console bound to the named connection, asking nothing", function()
+    with_connections(sample, function()
+      -- No vim.ui is stubbed on purpose: a scripted answer would hide a
+      -- picker, and the point of naming a connection is that nothing asks.
+      H.capture_notify(function() cli.db("beta") end)
+      H.eq("sql", vim.bo.filetype)
+      local attached = D.attached()
+      H.ok(attached, "the buffer should carry a connection")
+      H.eq("jdbc:sqlite:/tmp/beta.db", attached.url)
+      H.matches("beta%-%d+%.sql$", vim.api.nvim_buf_get_name(0),
+        "a console is a real file, so it survives a restart")
+    end)
+  end)
+
+  H.it("has an explorer command that exists before the plugin is loaded", function()
+    -- A spec with only `keys` owns commands that do not exist until the key is
+    -- pressed, and `kebab db` runs `nvim -c DBUI` from a cold start. Without a
+    -- `cmd` trigger that is "Not an editor command".
+    for _, name in ipairs({ "DBUI", "DBUIToggle" }) do
+      H.eq(2, vim.fn.exists(":" .. name), name .. " should be a known command")
+    end
+  end)
+end)
+
 H.describe("the connection store", function()
   H.it("is empty to begin with", function()
     with_store(function()

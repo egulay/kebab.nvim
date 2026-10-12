@@ -150,6 +150,10 @@ kebab list                # every project found under your roots
 kebab types               # what can be created, and what each needs installed
 kebab types --prompts     # ...and what each one asks you
 kebab doctor              # check the install
+
+kebab db                  # the SQL IDE: explorer open, connections on the left
+kebab db shop_local       # a SQL console on that saved connection
+kebab db --env ~/p/.env   # export a .env file first, so the passwords are there
 ```
 
 Any question a project type asks is settable as `--name value`, so a language
@@ -215,6 +219,10 @@ environment variable to read it from:
 
 Pointing `password_env` at a name an existing project already exports — a
 `.env` file it ships with — means sourcing that file is all the setup there is.
+`kebab db --env <file>` does the sourcing itself, and `$KEBAB_DB_ENV` names a
+file to use when `--env` is not given, so `kebab db` alone is enough. The
+sourcing happens in the shell, before Neovim starts: a connection reads its
+variable from the editor's own environment, which nothing can add to afterwards.
 
 If a server rejects the connection with `FATAL: invalid value for parameter
 "TimeZone"`, the machine's timezone is a legacy alias (`timedatectl show -p

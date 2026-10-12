@@ -533,3 +533,75 @@ H.describe("kebab serve and the socket path", function()
     vim.fn.delete(path)
   end)
 end)
+
+H.describe("`kebab db`", function()
+  H.it("opens the explorer with no argument", function()
+    local r = run({ "db" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(0, r.code, r.err)
+    local chunk = lua_chunk(vim.trim(r.out))
+    compiles(chunk)
+    H.matches("kebab%.cli'%)%.db%(\"\"%)", chunk)
+  end)
+
+  H.it("passes a connection name through, quoted", function()
+    local r = run({ "db", 'we"ird\\name' }, { KEBAB_DRY_RUN = "1" })
+    H.eq(0, r.code, r.err)
+    local chunk = lua_chunk(vim.trim(r.out))
+    compiles(chunk)
+    H.matches("we", chunk)
+  end)
+
+  H.it("exports an env file before starting the editor", function()
+    -- A password is never stored by this layer, so something has to put the
+    -- variables in the environment the editor inherits. That cannot be done
+    -- from Lua after Neovim has started, which is why it is done here.
+    local dir = H.tmpdir("db-env")
+    H.write(dir .. "/db.env", "KEBAB_SPEC_PW=sentinel\n")
+    local probe = dir .. "/fake-nvim"
+    H.write(probe, "#!/bin/sh\nprintf 'pw=%s\\n' \"$KEBAB_SPEC_PW\"\n")
+    vim.fn.setfperm(probe, "rwxr-xr-x")
+
+    local r = run({ "db", "--env", dir .. "/db.env" }, { KEBAB_NVIM = probe })
+    H.eq(0, r.code, r.err)
+    H.matches("pw=sentinel", r.out, "the editor should inherit the variable")
+
+    local without = run({ "db" }, { KEBAB_NVIM = probe })
+    H.eq(0, without.code, without.err)
+    H.matches("pw=\n", without.out .. "\n", "and not when no env file is given")
+  end)
+
+  H.it("takes the env file from $KEBAB_DB_ENV too", function()
+    local dir = H.tmpdir("db-env-var")
+    H.write(dir .. "/db.env", "KEBAB_SPEC_PW=from-the-variable\n")
+    local probe = dir .. "/fake-nvim"
+    H.write(probe, "#!/bin/sh\nprintf 'pw=%s\\n' \"$KEBAB_SPEC_PW\"\n")
+    vim.fn.setfperm(probe, "rwxr-xr-x")
+    local r = run({ "db" }, { KEBAB_NVIM = probe, KEBAB_DB_ENV = dir .. "/db.env" })
+    H.eq(0, r.code, r.err)
+    H.matches("pw=from%-the%-variable", r.out)
+  end)
+
+  H.it("refuses an env file it cannot read, rather than starting without it", function()
+    -- Starting anyway would open the IDE with every connection unable to
+    -- authenticate, which reads as a broken database rather than a typo.
+    local r = run({ "db", "--env", "/definitely/not/here.env" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(1, r.code)
+    H.matches("no such env file", r.err)
+  end)
+
+  H.it("rejects a second connection name and an unknown flag", function()
+    local two = run({ "db", "a", "b" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(1, two.code)
+    H.matches("only one connection", two.err)
+    local bogus = run({ "db", "--nope" }, { KEBAB_DRY_RUN = "1" })
+    H.eq(1, bogus.code)
+    H.matches("unknown option", bogus.err)
+  end)
+
+  H.it("is in the usage text", function()
+    local r = run({ "--help" })
+    H.eq(0, r.code)
+    H.matches("kebab db", r.out)
+    H.matches("%-%-env", r.out)
+  end)
+end)

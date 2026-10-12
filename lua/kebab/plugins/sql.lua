@@ -41,6 +41,11 @@ return {
       vim.g.db_ui_save_location = data .. "/kebab/sql/queries"
       vim.g.db_ui_tmp_query_location = data .. "/kebab/sql/tmp"
     end,
+    -- A spec with only `keys` owns commands that do not exist until the key is
+    -- pressed, so `nvim -c DBUI` -- which is what `kebab db` runs -- failed
+    -- with "Not an editor command". Declaring them makes lazy stub them from
+    -- startup. Same trap as AerialToggle and the Flutter entries.
+    cmd = { "DBUI", "DBUIToggle", "DBUIAddConnection", "DBUIFindBuffer", "DBUILastQueryInfo" },
     keys = {
       -- <leader>DD rather than <leader>D: the whole of <leader>d* belongs to
       -- the debugger (da/db/dc/dt/dp/de and a dozen more), so the database

@@ -268,6 +268,17 @@ Each type declares `requires`, the executables it needs on PATH, so a missing
 toolchain is reported as "Flutter app needs flutter on PATH" rather than as a
 confusing failure half way through.
 
+`kebab db` is to the SQL IDE what `kebab` is to the editor. Before it, the
+answer to "how do I open the database explorer" was "start Neovim, then press
+a key" -- which is not how you start a dedicated database IDE, and the question
+was asked three times. It also owns the one thing Lua cannot do: a connection
+reads its password from an environment variable, and nothing can add to the
+editor's environment once Neovim has started, so `--env <file>` (or
+`$KEBAB_DB_ENV`) is sourced by the shell script before it execs the editor.
+Refusing an unreadable env file is deliberate: starting anyway opens the IDE
+with every connection unable to authenticate, which reads as a broken database
+rather than a typo.
+
 ## `cli.lua` + `bin/kebab`
 
 Opening and creating projects from the shell, so the IDE starts like `code .`

@@ -127,6 +127,80 @@ function M.create_and_quit(spec)
   vim.cmd(succeeded and "qa!" or "cq 1")
 end
 
+-- ---------------------------------------------------------------- database
+--
+-- `kebab db` is to the SQL IDE what `kebab` is to the editor: one word that
+-- lands you in it. Without it the answer to "how do I start the database
+-- explorer" was "start Neovim, then press a key", which is not how you start
+-- a dedicated database IDE.
+
+---Saved connections whose name matches `query`, exact match winning outright.
+---Same shape as M.resolve for projects, and for the same reason: an ambiguous
+---name should offer a choice, not pick one.
+---@param query string
+---@return table[] matches
+function M.resolve_connection(query)
+  local list = require("kebab.db").connections()
+  local needle = query:lower()
+  local exact, partial = {}, {}
+  for _, c in ipairs(list) do
+    if c.name:lower() == needle then
+      exact[#exact + 1] = c
+    elseif c.name:lower():find(needle, 1, true) then
+      partial[#partial + 1] = c
+    end
+  end
+  return #exact > 0 and exact or partial
+end
+
+---Open the SQL IDE: the explorer, or a console on one connection.
+---
+---Runs in an interactive session, so it reports by notifying rather than
+---returning -- the caller is a person looking at the editor.
+---@param name? string a saved connection; nil opens the explorer
+function M.db(name)
+  local db = require("kebab.db")
+  local list, err = db.connections()
+  if err then
+    return vim.notify(err, vim.log.levels.ERROR)
+  end
+  if #list == 0 then
+    return vim.notify("No database connections yet — <leader>Da or :IdeDbAdd adds one", vim.log.levels.WARN)
+  end
+
+  if name == nil or name == "" then
+    -- The explorer belongs to a lazy spec, so it has to be loaded before its
+    -- command is called -- see the `cmd` triggers in plugins/sql.lua.
+    pcall(function()
+      require("lazy").load({ plugins = { "vim-dadbod-ui" } })
+    end)
+    db.publish()
+    local ok, cerr = pcall(vim.cmd, "DBUI")
+    if not ok then
+      return vim.notify("Could not open the database explorer: " .. tostring(cerr), vim.log.levels.ERROR)
+    end
+    return
+  end
+
+  local matches = M.resolve_connection(name)
+  if #matches == 0 then
+    local names = vim.tbl_map(function(c) return c.name end, list)
+    return vim.notify(("No connection called %q. There is: %s"):format(name, table.concat(names, ", ")),
+      vim.log.levels.ERROR)
+  end
+  if #matches == 1 then
+    return db.console(matches[1])
+  end
+  vim.ui.select(matches, {
+    prompt = ("%d connections match %q"):format(#matches, name),
+    format_item = function(c) return ("%-22s %s"):format(c.name, c.url) end,
+  }, function(choice)
+    if choice then
+      db.console(choice)
+    end
+  end)
+end
+
 -- -------------------------------------------------------------- reporting
 
 ---Lines listing every discovered project. Plain text, for a terminal.
