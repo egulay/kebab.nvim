@@ -213,6 +213,27 @@ end
 
 ---Drop a connection's published credentials.
 ---
+---Re-read a url's credentials from the environment, now.
+---
+---M.publish() publishes what the environment held *at startup*. Two things
+---break that: a shell that had not sourced the env file yet (the usual case --
+---a password is exported in one terminal and the editor was started from
+---another), and `:let $PG_PASSWORD = '...'` inside the session, which has to
+---work as the escape hatch it looks like. The dadbod adapter calls this before
+---every run, so the credentials are whatever the environment says right now.
+---@param url string
+---@return string|nil warn why there is no password, if there is none
+function M.ensure_credentials(url)
+  for _, c in ipairs((M.connections())) do
+    if c.url == url then
+      return publish_credentials(c)
+    end
+  end
+  return nil
+end
+
+---Drop a url's published credentials.
+---
 ---They used to accumulate: publish_credentials only ever added, so a password
 ---resolved once stayed in a process-global table for the rest of the session,
 ---including after the connection was removed from the store.
@@ -239,7 +260,9 @@ function M.publish()
   local dbs = {}
   for _, c in ipairs(list) do
     publish_credentials(c)
-    dbs[#dbs + 1] = { name = c.name, url = c.url }
+    -- dadbod strips a leading "jdbc:" and then dispatches on what is left,
+    -- so the explorer has to hold the kjdbc: form or it talks to psql.
+    dbs[#dbs + 1] = { name = c.name, url = jdbc.dadbod_url(c.url) }
   end
   vim.g.dbs = dbs
   return dbs, nil
@@ -256,7 +279,7 @@ end
 function M.attach(c, bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local warn = publish_credentials(c)
-  vim.b[bufnr].db = c.url
+  vim.b[bufnr].db = jdbc.dadbod_url(c.url)
   vim.b[bufnr].kebab_db_name = c.name
   pcall(vim.fn["vim_dadbod_completion#fetch"], bufnr)
   -- Load the schema now so the first completion is instant rather than paying
@@ -273,7 +296,7 @@ end
 ---The connection attached to a buffer, if any.
 function M.attached(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
-  local url = vim.b[bufnr].db
+  local url = jdbc.plain_url(vim.b[bufnr].db)
   if url == nil or url == "" then
     return nil
   end

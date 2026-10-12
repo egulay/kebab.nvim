@@ -134,6 +134,49 @@ function M.driver(key)
   return nil
 end
 
+-- ------------------------------------------------------------ dadbod urls
+--
+-- dadbod does `substitute(url, '^jdbc:', '', '')` in its own s:resolve, by
+-- design: it accepts JDBC-shaped urls for its *native* adapters. The
+-- consequence here was total. `jdbc:postgresql://host/db` became
+-- `postgresql://host/db`, which dadbod dispatches to db#adapter#postgresql --
+-- so :DB, <leader>S, dadbod-completion and the explorer tree all shelled out
+-- to psql, and this layer's JDBC runner was never called by any of them. The
+-- explorer reported `Tables (0)` for a database with 48, because
+-- db_ui#drawer#populate_tables bails out when dadbod could not connect, and
+-- psql could not: it has no idea what KEBAB_DB_PASSWORD is.
+--
+-- The fix is a scheme of our own that dadbod has no rule for. The real JDBC
+-- url is carried whole behind it rather than rebuilt, because a JDBC url is
+-- not uniformly shaped -- `jdbc:sqlserver://host;database=d` is not a
+-- hierarchical url at all -- and anything that re-synthesises one will
+-- eventually get a driver's dialect wrong.
+M.DADBOD_SCHEME = "kjdbc"
+
+---The url dadbod and dadbod-ui should hold for a JDBC url.
+---@param url string a JDBC url
+---@return string
+function M.dadbod_url(url)
+  if url:sub(1, #M.DADBOD_SCHEME + 1) == M.DADBOD_SCHEME .. ":" then
+    return url
+  end
+  return M.DADBOD_SCHEME .. ":" .. url
+end
+
+---The JDBC url behind a dadbod one. Safe to call on either.
+---@param url string|nil
+---@return string|nil
+function M.plain_url(url)
+  if type(url) ~= "string" then
+    return url
+  end
+  local prefix = M.DADBOD_SCHEME .. ":"
+  if url:sub(1, #prefix) == prefix then
+    return url:sub(#prefix + 1)
+  end
+  return url
+end
+
 ---The subprotocol of a JDBC URL: "jdbc:postgresql://..." -> "postgresql".
 ---@param url string
 ---@return string|nil
@@ -622,7 +665,22 @@ end
 ---@param url string
 ---@param mode string
 ---@return table { ok: boolean, argv?: string[], err?: string }
+---Credentials for `url` as the environment has them *now*.
+---
+---kebab.db is required here rather than at the top of the file: db requires
+---jdbc, so a top-level require would be a cycle. By the time anything calls
+---this, both are loaded.
+---@param url string
+---@return string|nil warn
+function M.refresh_credentials(url)
+  local ok, warn = pcall(function()
+    return require("kebab.db").ensure_credentials(url)
+  end)
+  return ok and warn or nil
+end
+
 function M.vim_command(url, mode)
+  M.refresh_credentials(url)
   local argv, err = M.command(url, mode or "query")
   if not argv then
     return { ok = false, err = err or "unknown error" }
@@ -645,13 +703,28 @@ end
 
 ---Table names for VimScript, as a plain list (empty when something failed, with
 ---the reason notified -- dadbod's tables() has nowhere to put an error).
+---The table list for the dadbod adapter, i.e. what the explorer shows when a
+---connection is expanded.
+---
+---It must **throw** when it cannot connect. Returning an empty list made the
+---explorer say "0 tables" for a database full of them, with the real reason --
+---no password -- visible only as a notification that scrolls away. "That
+---database is empty" and "I could not log in" have to look different.
+---Shaped for luaeval() like M.vim_command: the adapter raises the error, so
+---the user sees "DB exception: PG_PASSWORD is not set" rather than that
+---message wrapped in E5108 and a Lua traceback.
+---@param url string
+---@return table { ok: boolean, tables?: string[], err?: string }
 function M.vim_tables(url)
+  local warn = M.refresh_credentials(url)
+  if warn then
+    return { ok = false, err = warn }
+  end
   local lines, err = M.run(url, "tables")
   if not lines then
-    vim.notify("kebab.jdbc: " .. tostring(err), vim.log.levels.WARN)
-    return {}
+    return { ok = false, err = M.hint(tostring(err)) }
   end
-  return lines
+  return { ok = true, tables = lines }
 end
 
 ---Split a block of output into lines, dropping the trailing blanks that a
@@ -847,11 +920,21 @@ local function start_daemon(url)
 
   -- uv.spawn replaces the environment outright, so the real one has to be
   -- rebuilt or the JVM loses PATH, HOME and JAVA_HOME.
-  local env = {}
-  for key, value in pairs(vim.fn.environ()) do
-    env[#env + 1] = key .. "=" .. value
-  end
+  --
+  -- Merged as a table first, and only then flattened: appending
+  -- KEBAB_DB_URL=... after a copy of the real environment put *two* entries
+  -- with that name in the array, and glibc's getenv returns the **first** one.
+  -- M.vim_command has to leave those names in Neovim's own environment (dadbod
+  -- spawns the argv itself, with Neovim's environment), so the stale value was
+  -- already in environ() and won -- every warm process after the first :DB
+  -- connected to whatever database that call had used, silently. Two saved
+  -- connections, and a query sent to one answered from the other.
+  local merged = vim.fn.environ()
   for key, value in pairs(M.spawn_env(url)) do
+    merged[key] = value
+  end
+  local env = {}
+  for key, value in pairs(merged) do
     env[#env + 1] = key .. "=" .. value
   end
 

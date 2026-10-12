@@ -243,6 +243,77 @@ H.describe("the JVM's timezone", function()
   end)
 end)
 
+H.describe("the scheme dadbod is given", function()
+  -- This block exists because the explorer reported `Tables (0)` for a
+  -- database with 48 tables, and the reason was that nothing dadbod resolves
+  -- had ever reached this layer.
+  local url = "jdbc:postgresql://localhost:5432/shop"
+
+  -- dadbod is a lazy spec, so it has to be loaded before its commands exist.
+  -- Its functions are autoloaded, which means exists("*db#resolve") answers 0
+  -- until the first call -- so the gate is the runtime file, not the function.
+  local function requires_dadbod()
+    pcall(function()
+      require("lazy").load({ plugins = { "vim-dadbod" } })
+    end)
+    if #vim.api.nvim_get_runtime_file("autoload/db.vim", false) == 0 then
+      H.skip("vim-dadbod is not on the runtimepath")
+    end
+  end
+
+  H.it("wraps a JDBC url in a scheme of kebab's own", function()
+    H.eq("kjdbc:" .. url, J.dadbod_url(url))
+    H.eq(url, J.plain_url(J.dadbod_url(url)))
+    H.eq("kjdbc:" .. url, J.dadbod_url(J.dadbod_url(url)), "wrapping twice is not a thing")
+    H.eq(url, J.plain_url(url), "and unwrapping a bare url leaves it alone")
+  end)
+
+  H.it("carries the JDBC url whole, rather than rebuilding it", function()
+    -- jdbc:sqlserver://host;database=d is not a hierarchical url at all, so
+    -- anything that parses and re-synthesises one gets a dialect wrong.
+    local odd = "jdbc:sqlserver://10.0.0.1:1433;database=REPORTING;encrypt=true"
+    H.eq(odd, J.plain_url(J.dadbod_url(odd)))
+  end)
+
+  H.it("survives dadbod's own resolver", function()
+    requires_dadbod()
+    -- dadbod does substitute(url, '^jdbc:', '', '') in s:resolve, by design:
+    -- it accepts JDBC-shaped urls for its *native* adapters. So a bare
+    -- jdbc:postgresql:// url becomes postgresql:// and dispatches to psql.
+    local resolved = vim.fn["db#resolve"](J.dadbod_url(url))
+    H.matches("^kjdbc:", resolved, "the scheme must survive resolution, got: " .. resolved)
+    local stripped = vim.fn["db#resolve"](url)
+    H.ok(not stripped:match("^jdbc:"), "documents the upstream behaviour: " .. stripped)
+  end)
+
+  H.it("dispatches to this layer's runner, not to a native client", function()
+    requires_dadbod()
+    -- The assertion that would have caught it. `psql` and `sqlite3` are both
+    -- installed on this machine, so the wrong adapter worked just well enough
+    -- to look right.
+    -- Resolve *then* dispatch, which is the order dadbod-ui uses: db#connect
+    -- resolves, and populate_tables dispatches on the resolved url. Dispatch
+    -- alone is not enough to catch this -- only the resolver strips the
+    -- scheme, so a bare jdbc: url passes a dispatch-only check and still ends
+    -- up at psql in real use.
+    local raw = "jdbc:sqlite:" .. H.tmpdir("dispatch") .. "/x.db"
+    local resolved = vim.fn["db#resolve"](J.dadbod_url(raw))
+    local argv = vim.fn["db#adapter#dispatch"](resolved, "command")
+    H.ok(vim.tbl_contains(argv, "KebabJdbc"),
+      "dadbod should run the JDBC runner, got: " .. table.concat(argv, " "))
+    H.eq("java", argv[1])
+  end)
+
+  H.it("tells dadbod not to probe the connection with an empty statement", function()
+    requires_dadbod()
+    -- db#connect runs the adapter's command with `auth_input` on stdin and
+    -- treats a non-zero exit as "could not connect". That probe is a query of
+    -- one newline, which this runner correctly refuses as not a statement, so
+    -- every connection failed and dadbod-ui never asked for the table list.
+    H.eq(false, vim.fn["db#adapter#kjdbc#auth_input"](), "v:false is dadbod's opt-out")
+  end)
+end)
+
 -- Everything below needs a JVM and, on a cold cache, the network. The cache
 -- directory is the real one on purpose: the 12MB driver is downloaded once and
 -- reused by later runs, which is also what a user experiences.
@@ -559,6 +630,35 @@ H.describe("the warm JDBC process", function()
     local lines, err = J.run("jdbc:cobol:x", "ping")
     H.falsy(lines)
     H.matches("No driver registered", err)
+  end)
+end)
+
+H.describe("a stale KEBAB_DB_URL in the environment", function()
+  H.it("does not decide which database a warm process talks to", function()
+    -- M.vim_command has to leave KEBAB_DB_URL in *Neovim's* environment,
+    -- because dadbod spawns the argv itself with Neovim's environment. The
+    -- warm process then rebuilt the child environment by copying environ()
+    -- and appending its own KEBAB_DB_URL -- two entries with that name, and
+    -- glibc's getenv returns the first. So every warm process started after
+    -- the first :DB connected to whatever database that call had used:
+    -- a query sent to one connection answered from another, silently.
+    if vim.fn.executable("java") == 0 or vim.fn.executable("javac") == 0 or vim.fn.executable("sqlite3") == 0 then
+      H.skip("a JDK and sqlite3 are needed")
+    end
+    local dir = H.tmpdir("env-leak")
+    local decoy, real = dir .. "/decoy.sqlite", dir .. "/real.sqlite"
+    H.eq(0, vim.system({ "sqlite3", decoy }, { stdin = "create table decoy_table (id integer);", text = true }):wait(30000).code)
+    H.eq(0, vim.system({ "sqlite3", real }, { stdin = "create table real_table (id integer);", text = true }):wait(30000).code)
+
+    local saved_env, saved_daemon = vim.env.KEBAB_DB_URL, vim.g.kebab_jdbc_daemon
+    vim.env.KEBAB_DB_URL = "jdbc:sqlite:" .. decoy
+    vim.g.kebab_jdbc_daemon = true
+    local tables, err = J.run("jdbc:sqlite:" .. real, "tables")
+    J.shutdown_all()
+    vim.env.KEBAB_DB_URL, vim.g.kebab_jdbc_daemon = saved_env, saved_daemon
+
+    H.ok(tables, tostring(err))
+    H.eq({ "real_table" }, tables, "the url it was asked for, not the one left in the environment")
   end)
 end)
 

@@ -535,6 +535,31 @@ client attached, file contents reverted.
   would be too late. An unreadable env file is a hard error: starting anyway
   opens the IDE with every connection failing to authenticate, which reads as
   a broken database rather than a typo.
+- **dadbod strips a leading `jdbc:` from any url** (`substitute(url, '^jdbc:',
+  '', '')` in its own `s:resolve`) and dispatches on what is left, because it
+  accepts JDBC-shaped urls for its *native* adapters. So `b:db` and
+  `vim.g.dbs` holding `jdbc:postgresql://...` sent `:DB`, `<leader>S`,
+  dadbod-completion and the whole explorer tree to **psql** -- this layer's
+  runner was never called by any of them. It looked like it worked because
+  psql and sqlite3 are installed here. The scheme is `kjdbc:` + the whole JDBC
+  url now (`autoload/db/adapter/kjdbc.vim`); `jdbc.dadbod_url` / `plain_url`
+  convert. The test that catches it must **resolve then dispatch** -- dispatch
+  alone passes on a bare `jdbc:` url, since only the resolver strips it.
+- The explorer reported **`Tables (0)` for a database with 48** for two more
+  reasons, both worth knowing: `db#connect` proves a connection by running the
+  adapter's command with `auth_input` on stdin and treating a non-zero exit as
+  failure -- for a client that reads SQL on stdin that probe is a query of one
+  newline, which the runner correctly refuses, so `db#adapter#kjdbc#auth_input`
+  returns `v:false` (dadbod's own opt-out). And `db_ui#drawer#populate_tables`
+  **returns before asking the adapter** when dadbod could not connect, so a
+  connection failure and an empty database look identical. `vim_tables` raises
+  rather than returning `{}` for that reason.
+- **Two entries with the same name in a `uv.spawn` env array: glibc's `getenv`
+  returns the first.** The warm process copied `vim.fn.environ()` and then
+  appended its own `KEBAB_DB_URL`, and `vim_command` has to leave that name in
+  Neovim's environment (dadbod spawns the argv itself) -- so after one `:DB`,
+  every warm process connected to *that* database whatever url it was asked
+  for. Merge into a table and flatten once.
 - **A legacy timezone alias breaks every JDBC connection.** systemd accepts
   `timedatectl set-timezone Turkey`, the JVM reports that name verbatim in the
   PostgreSQL startup packet, and a server whose tzdata lacks the

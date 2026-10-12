@@ -329,6 +329,8 @@ H.describe("publishing to dadbod", function()
       H.eq(1, #dbs)
       H.eq("shop", dbs[1].name)
       H.eq("shop", vim.g.dbs[1].name)
+      H.eq("kjdbc:jdbc:sqlite:/tmp/shop.sqlite", vim.g.dbs[1].url,
+        "the explorer must hold the scheme dadbod will not rewrite")
     end)
   end)
 end)
@@ -337,9 +339,17 @@ H.describe("attaching a connection to a buffer", function()
   H.it("sets b:db so :DB and completion use it", function()
     vim.cmd("enew!")
     vim.bo.filetype = "sql"
-    local c = { name = "shop", url = "jdbc:sqlite:/tmp/shop.sqlite" }
+    -- A real path: attaching makes dadbod-completion connect, and dadbod now
+    -- routes that through this layer's runner, so a made-up path would create
+    -- a stray database.
+    local c = { name = "shop", url = "jdbc:sqlite:" .. H.tmpdir("attach") .. "/shop.sqlite" }
     H.ok(D.attach(c))
-    H.eq(c.url, vim.b.db)
+    -- The kjdbc: form, not the bare JDBC url: dadbod strips a leading "jdbc:"
+    -- and dispatches on what is left, so a bare one reaches dadbod's own psql
+    -- or sqlite3 adapter and never this layer. That is how the explorer came
+    -- to report "Tables (0)" for a database with 48.
+    H.eq("kjdbc:" .. c.url, vim.b.db)
+    H.eq(c.url, D.attached().url, "and kebab gets the plain url back")
     H.eq("shop", vim.b.kebab_db_name)
     local attached = D.attached()
     H.eq("shop", attached.name)

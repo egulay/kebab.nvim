@@ -367,7 +367,7 @@ function Source:enabled()
   if not SQL_FILETYPES[vim.bo.filetype] then
     return false
   end
-  local url = vim.b.db
+  local url = require("kebab.jdbc").plain_url(vim.b.db)
   return type(url) == "string" and url ~= "" and jdbc.subprotocol(url) ~= nil
 end
 
@@ -376,7 +376,7 @@ function Source:get_trigger_characters()
 end
 
 function Source:get_completions(ctx, callback)
-  local url = vim.b.db
+  local url = require("kebab.jdbc").plain_url(vim.b.db)
   if type(url) ~= "string" or url == "" then
     callback({ items = {}, is_incomplete_forward = false, is_incomplete_backward = false })
     return function() end
