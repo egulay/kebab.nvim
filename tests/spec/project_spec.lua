@@ -282,19 +282,46 @@ H.describe("the Open Project picker", function()
 end)
 
 H.describe("project roots", function()
-  H.it("prefers vim.g.kebab_project_roots", function()
+  H.it("takes vim.g.kebab_project_roots", function()
     with_roots({ "/a", "/b" }, function()
       H.eq({ "/a", "/b" }, project.roots())
+      H.eq("g", project.roots_source())
     end)
   end)
 
-  H.it("falls back to KEBAB_PROJECT_ROOTS", function()
+  H.it("reads KEBAB_PROJECT_ROOTS", function()
     local saved_g, saved_env = vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS
     vim.g.kebab_project_roots = nil
     vim.env.KEBAB_PROJECT_ROOTS = "/x:/y:/z"
-    local got = project.roots()
+    local got, source = project.roots(), project.roots_source()
     vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS = saved_g, saved_env
     H.eq({ "/x", "/y", "/z" }, got)
+    H.eq("env", source)
+  end)
+
+  H.it("lets the environment beat the config, because it is per invocation", function()
+    -- `KEBAB_PROJECT_ROOTS=/tmp/x kebab list` has to mean /tmp/x. It used to
+    -- mean "whatever the config says", so the documented override silently
+    -- did nothing for anyone who had set the global -- which is anyone with
+    -- more than one project directory.
+    local saved_g, saved_env = vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS
+    vim.g.kebab_project_roots = { "/from/config" }
+    vim.env.KEBAB_PROJECT_ROOTS = "/from/the/command/line"
+    local got, source = project.roots(), project.roots_source()
+    vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS = saved_g, saved_env
+    H.eq({ "/from/the/command/line" }, got)
+    H.eq("env", source)
+  end)
+
+  H.it("ignores an empty KEBAB_PROJECT_ROOTS", function()
+    -- The suite sets it to "" for the shell specs; empty must not mean
+    -- "no roots at all", or discovery finds nothing and says nothing.
+    local saved_g, saved_env = vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS
+    vim.g.kebab_project_roots = { "/from/config" }
+    vim.env.KEBAB_PROJECT_ROOTS = ""
+    local got = project.roots()
+    vim.g.kebab_project_roots, vim.env.KEBAB_PROJECT_ROOTS = saved_g, saved_env
+    H.eq({ "/from/config" }, got)
   end)
 
   H.it("has sensible defaults otherwise", function()

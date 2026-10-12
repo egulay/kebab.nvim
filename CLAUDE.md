@@ -522,6 +522,12 @@ client attached, file contents reverted.
   unreadable root looked like an empty one -- and `H.eq(x, project.discover())`
   now passes the problems table as the *message* argument, so wrap the call in
   parens when only the first value is wanted.
+- **`$KEBAB_PROJECT_ROOTS` beats `vim.g.kebab_project_roots`**, not the other
+  way round: a variable set for one invocation is more specific than a config
+  file. The old order meant the documented override silently did nothing for
+  anyone who had set the global, which the suite only noticed when the live
+  config started setting it. Empty is not "no roots" -- the shell specs pass
+  `KEBAB_PROJECT_ROOTS=""` and discovery must fall through.
 - A missing **default** root is not a problem: the defaults name
   `~/src` and friends, which most machines lack. Only a root the user
   named in `vim.g.kebab_project_roots` or `$KEBAB_PROJECT_ROOTS` is reported

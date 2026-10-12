@@ -30,14 +30,21 @@ local DEFAULT_ROOTS = {
 
 ---Where to look for projects. Overridable so the tests can point discovery at
 ---a scratch directory, and so a user with another layout is not stuck with it.
----vim.g.kebab_project_roots wins over $KEBAB_PROJECT_ROOTS (colon separated).
+---
+---`$KEBAB_PROJECT_ROOTS` (colon separated) wins over
+---`vim.g.kebab_project_roots`, because a variable set for one invocation is
+---more specific than a setting in a config file -- `KEBAB_PROJECT_ROOTS=/tmp/x
+---kebab list` has to mean /tmp/x. It used to be the other way round, which
+---meant the documented override silently did nothing for anyone who had set
+---the global, and that is most people who have more than one project
+---directory.
 function M.roots()
-  if type(vim.g.kebab_project_roots) == "table" then
-    return vim.g.kebab_project_roots
-  end
   local env = vim.env.KEBAB_PROJECT_ROOTS
   if env and env ~= "" then
     return vim.split(env, ":", { trimempty = true })
+  end
+  if type(vim.g.kebab_project_roots) == "table" then
+    return vim.g.kebab_project_roots
   end
   return DEFAULT_ROOTS
 end
@@ -67,8 +74,8 @@ local function is_dir(path, scandir_type)
   return stat ~= nil and stat.type == "directory"
 end
 
----Where the root list came from: "g" (vim.g.kebab_project_roots), "env"
----($KEBAB_PROJECT_ROOTS) or "default".
+---Where the root list came from: "env" ($KEBAB_PROJECT_ROOTS), "g"
+---(vim.g.kebab_project_roots) or "default", in that precedence.
 ---
 ---Worth distinguishing because the defaults deliberately name roots most
 ---machines do not have -- ~/src on a box that keeps its work elsewhere --
@@ -76,12 +83,12 @@ end
 ---for by name is.
 ---@return "g"|"env"|"default"
 function M.roots_source()
-  if type(vim.g.kebab_project_roots) == "table" then
-    return "g"
-  end
   local env = vim.env.KEBAB_PROJECT_ROOTS
   if env and env ~= "" then
     return "env"
+  end
+  if type(vim.g.kebab_project_roots) == "table" then
+    return "g"
   end
   return "default"
 end

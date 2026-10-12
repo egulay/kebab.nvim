@@ -164,7 +164,8 @@ worked.
 
 Project roots default to `~/Projects`, `~/src`, `~/code` and `~/dev` — generic
 conventions, not whatever your editor named a folder after itself. Override
-with `KEBAB_PROJECT_ROOTS` (colon separated) or `vim.g.kebab_project_roots`. `KEBAB_DRY_RUN=1` prints the Lua a command would
+with `vim.g.kebab_project_roots`, or with `KEBAB_PROJECT_ROOTS` (colon
+separated) for a single invocation, which wins. `KEBAB_DRY_RUN=1` prints the Lua a command would
 run instead of running it.
 
 Each root is scanned two levels deep, so `~/Projects/work/<project>` is found
