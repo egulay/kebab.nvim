@@ -12,8 +12,9 @@ local lsp = require("kebab.lsp")
 local fixture_dir
 
 local function requires_go()
-  if vim.fn.executable("go") == 0 then
-    H.skip("go is needed for a project gopls will attach to")
+  local usable, why = H.usable("go")
+  if not usable then
+    H.skip(why .. " -- go is needed for a project gopls will attach to")
   end
   if not vim.uv.fs_stat(vim.fn.stdpath("data") .. "/mason/bin/gopls")
     and vim.fn.executable("gopls") == 0 then
@@ -415,8 +416,9 @@ H.describe("columns on a line with non-ASCII", function()
     if dir then
       return dir
     end
-    if vim.fn.executable("go") == 0 then
-      H.skip("go is needed")
+    local usable, why = H.usable("go")
+    if not usable then
+      H.skip(why)
     end
     dir = H.tmpdir("enc")
     local res = vim.system({ "go", "mod", "init", "example.com/enc" }, { cwd = dir, text = true }):wait(60000)
@@ -442,10 +444,10 @@ H.describe("columns on a line with non-ASCII", function()
   end
 
   H.it("reports a byte column, matching what diagnostics reports", function()
-    local root = fixture()
-    local saved = vim.fn.getcwd()
-    vim.cmd("cd " .. vim.fn.fnameescape(root))
-    local ok, err = pcall(function()
+    -- H.in_dir, not cd + pcall + cd: a pcall around a body that can H.skip
+    -- swallows the skip and reports it as a failure whose message is
+    -- "table: 0x...", which is what CI showed on a runner with no gopls.
+    H.in_dir(fixture(), function()
       -- the second `helper(` sits after three two-byte characters, so its byte
       -- column and its utf-16 column differ by three
       local byte_col = line:find("helper", line:find("helper") + 1)
@@ -465,15 +467,10 @@ H.describe("columns on a line with non-ASCII", function()
       H.ok(vim.tbl_contains(cols, byte_col), ("expected the byte column %d, got %s"):format(byte_col, vim.inspect(cols)))
       H.falsy(vim.tbl_contains(cols, utf16_col), ("the utf-16 column %d is the bug"):format(utf16_col))
     end)
-    vim.cmd("cd " .. vim.fn.fnameescape(saved))
-    H.ok(ok, tostring(err))
   end)
 
   H.it("round-trips its own output", function()
-    local root = fixture()
-    local saved = vim.fn.getcwd()
-    vim.cmd("cd " .. vim.fn.fnameescape(root))
-    local ok, err = pcall(function()
+    H.in_dir(fixture(), function()
       local byte_col = line:find("helper", line:find("helper") + 1)
       -- feeding a reported position back in has to land on the same symbol
       local result, rerr = lsp.definition("main.go", 10, byte_col, { attach_timeout = 120000, request_timeout = 30000 })
@@ -483,8 +480,6 @@ H.describe("columns on a line with non-ASCII", function()
       H.eq(1, result.count, vim.inspect(result.locations))
       H.eq(5, result.locations[1].line, "it should resolve to the helper definition")
     end)
-    vim.cmd("cd " .. vim.fn.fnameescape(saved))
-    H.ok(ok, tostring(err))
   end)
 end)
 

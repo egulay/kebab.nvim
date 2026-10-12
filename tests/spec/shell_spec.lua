@@ -353,8 +353,9 @@ H.describe("bin/kebab semantic queries", function()
   end)
 
   H.it("answers a real query, with a greppable position", function()
-    if vim.fn.executable("go") == 0 then
-      H.skip("go is needed for a project a language server will attach to")
+    local usable, why = H.usable("go")
+    if not usable then
+      H.skip(why .. " -- go is needed for a project a language server attaches to")
     end
     local dir = H.tmpdir("shell-agent")
     local init = vim.system({ "go", "mod", "init", "example.com/s" }, { cwd = dir, text = true })

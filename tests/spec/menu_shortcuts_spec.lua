@@ -294,8 +294,9 @@ H.describe("the buffer-local shortcuts the menu advertises", function()
   end)
 
   H.it("binds the LSP keys on a buffer with a server attached", function()
-    if vim.fn.executable("go") == 0 then
-      H.skip("go is needed for a buffer with a language server")
+    local usable, why = H.usable("go")
+    if not usable then
+      H.skip(why .. " -- go is needed for a buffer with a language server")
     end
     local keys = advertised("<leader>c")
     vim.list_extend(keys, { "gd", "gI", "gr" })

@@ -61,6 +61,23 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Go, and gopls built from it: without a language server the semantic
+      # query specs skip, and those are the agent contract -- byte columns,
+      # settled diagnostics, the three-way --exit-code. Skipping them is how
+      # a regression there reaches a release.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: gopls
+        run: go install golang.org/x/tools/gopls@latest
+
+      # The runners ship rustup with *no default toolchain*, so `cargo` is on
+      # PATH and fails when run: "rustup could not choose a version of cargo
+      # to run". That made the Rust scaffold spec fail rather than skip, which
+      # is what this workflow's first red run was.
+      - name: a default Rust toolchain
+        run: rustup default stable
+
       - name: install the way a stranger does, then run the suite
         run: ./tests/ci/bootstrap.sh
 

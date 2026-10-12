@@ -71,6 +71,60 @@ function H.skip(why)
   error({ skip = true, why = why }, 0)
 end
 
+---Is this tool present *and* able to run?
+---
+---`executable()` answers for the file, not for the tool. GitHub's runners ship
+---a `cargo` that is a rustup shim with no default toolchain: it is on PATH,
+---and running it fails with "rustup could not choose a version of cargo to
+---run". The spec skipped on `executable("cargo") == 0`, so it ran and failed.
+---Same shape as python3 without ensurepip.
+---The liveness command belongs to the tool: `go --version` is not a thing
+---("flag provided but not defined: -version"), so a blanket `--version` turned
+---nineteen passing tests into skips the moment this was introduced. Known
+---tools carry their own; anything else gets `--version`.
+---@param exe string
+---@param args? string[] overrides the liveness check
+---@return boolean usable, string|nil why
+function H.usable(exe, args)
+  if vim.fn.executable(exe) == 0 then
+    return false, exe .. " is not on PATH"
+  end
+  local LIVENESS = { go = { "version" } }
+  local cmd = { exe }
+  vim.list_extend(cmd, args or LIVENESS[exe] or { "--version" })
+  local ok, res = pcall(function()
+    return vim.system(cmd, { text = true }):wait(30000)
+  end)
+  if not ok then
+    return false, ("%s could not be run: %s"):format(exe, tostring(res))
+  end
+  if res.code ~= 0 then
+    local detail = vim.trim((res.stderr or "") .. (res.stdout or "")):gsub("%s+", " ")
+    return false, ("%s is on PATH but not usable: %s"):format(exe, detail:sub(1, 160))
+  end
+  return true, nil
+end
+
+---Run `fn` with the working directory set to `dir`, and put it back after.
+---
+---Why this exists rather than the obvious four lines: `cd`, `pcall(fn)`, `cd`
+---back, `H.ok(ok, tostring(err))` turns a **skip into a failure**, because
+---`H.skip` raises a table and the pcall catches it. CI reported two tests as
+---`agent_spec.lua:469: table: 0x7f85e7518ce0` -- a failure with no message,
+---on a runner that simply had no gopls. This re-raises whatever happened
+---faithfully, so a skip stays a skip and an error keeps its message.
+---@param dir string
+---@param fn function
+function H.in_dir(dir, fn)
+  local saved = vim.fn.getcwd()
+  vim.cmd("cd " .. vim.fn.fnameescape(dir))
+  local ok, err = pcall(fn)
+  pcall(vim.cmd, "cd " .. vim.fn.fnameescape(saved))
+  if not ok then
+    error(err, 0)
+  end
+end
+
 -- ------------------------------------------------------------- assertions
 
 local function fmt(v)
@@ -84,9 +138,19 @@ function H.eq(expected, got, msg)
   end
 end
 
+---`msg` may arrive as a table: a function returning `value, problems` passed
+---straight into an assertion puts the second return in the message slot, and
+---`tostring` on it yields "table: 0x7f85e7518ce0". Render it instead.
+local function message(msg)
+  if type(msg) == "table" then
+    return (vim.inspect(msg):gsub("%s+", " "))
+  end
+  return msg
+end
+
 function H.ok(cond, msg)
   if not cond then
-    error(msg or "expected truthy, got " .. fmt(cond), 2)
+    error(message(msg) or "expected truthy, got " .. fmt(cond), 2)
   end
 end
 
@@ -94,7 +158,7 @@ function H.truthy(cond, msg) return H.ok(cond, msg) end
 
 function H.falsy(cond, msg)
   if cond then
-    error((msg or "expected falsy") .. ", got " .. fmt(cond), 2)
+    error((message(msg) or "expected falsy") .. ", got " .. fmt(cond), 2)
   end
 end
 

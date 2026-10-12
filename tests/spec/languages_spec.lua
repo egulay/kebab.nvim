@@ -77,8 +77,9 @@ H.describe("Go", function()
   end)
 
   H.it("scaffolds a module", function()
-    if vim.fn.executable("go") == 0 then
-      H.skip("go is not on PATH")
+    local usable, why = H.usable("go")
+    if not usable then
+      H.skip(why)
     end
     local project = require("kebab.project")
     local dest = H.tmpdir("go-new") .. "/mytool"
@@ -163,8 +164,12 @@ H.describe("Rust", function()
   end)
 
   H.it("scaffolds a crate", function()
-    if vim.fn.executable("cargo") == 0 then
-      H.skip("cargo is not on PATH")
+    -- `cargo` being on PATH is not the same as cargo working: a rustup shim
+    -- with no default toolchain is both present and unusable, which is what
+    -- GitHub's runners ship and what made this fail there rather than skip.
+    local usable, why = H.usable("cargo")
+    if not usable then
+      H.skip(why)
     end
     local project = require("kebab.project")
     local dest = H.tmpdir("rust-new") .. "/mycrate"
