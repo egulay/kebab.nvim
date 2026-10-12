@@ -326,6 +326,14 @@ function M.ping(c)
   return lines[1]
 end
 
+---How a table is built: columns, key, foreign keys both ways, indexes.
+---@param c kebab.DbConnection
+---@param table_name string
+function M.structure(c, table_name)
+  publish_credentials(c)
+  return jdbc.run(c.url, "structure", { args = { table_name }, timeout = 90000 })
+end
+
 ---Tables for a connection.
 function M.tables(c)
   publish_credentials(c)

@@ -318,6 +318,7 @@ Drivers come from Maven Central on first use; no native client needed.
 |---|---|---|
 | Open the database IDE | `kebab db` | from a shell: explorer open, connections on the left |
 | Open a table | **double click it** | the select top right, its rows under it |
+| How a table is built | `:IdeDbStructure` | columns, keys both ways, indexes — or right-click → Table |
 | Run what you edited | `Ctrl+Enter` | in either pane, and in insert mode too; rows refresh below |
 | ...on one connection | `k e b a b   d b   name` | straight into a SQL console |
 | Database tool window | `Space D D` | Explorer |

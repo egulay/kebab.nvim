@@ -227,6 +227,7 @@ local database = {
   { name = "Test Connection", cmd = A.ex("IdeDbPing"), rtxt = "<leader>Dp" },
   { name = "separator" },
   { name = "Browse Tables...", cmd = A.ex("IdeDbTables"), rtxt = "<leader>Dt" },
+  { name = "Table Structure...", cmd = A.ex("IdeDbStructure"), rtxt = ":IdeDbStructure" },
   { name = "New SQL Console", cmd = A.ex("IdeDbConsole"), rtxt = "<leader>Dq" },
   { name = "separator" },
   { name = "Run Statement", cmd = A.ex("IdeDbRun"), rtxt = "<C-CR>" },

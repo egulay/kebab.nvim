@@ -19,6 +19,11 @@ local rows = {
   { name = "Re-run This Page", cmd = A.ex("IdeDbRefreshPage"), rtxt = "<leader>DR" },
 }
 
+local table_menu = {
+  { name = "Structure (columns, keys, indexes)...", cmd = A.ex("IdeDbStructure"), rtxt = ":IdeDbStructure" },
+  { name = "Browse Tables...", cmd = A.ex("IdeDbTables"), rtxt = "<leader>Dt" },
+}
+
 local connection = {
   { name = "Database Explorer", cmd = A.ex("DBUIToggle", { plugin = "vim-dadbod-ui" }), rtxt = "<leader>DD" },
   { name = "separator" },
@@ -38,6 +43,7 @@ local items = {
   { name = "Run Whole Buffer", cmd = A.ex("IdeDbRunAll"), rtxt = ":IdeDbRunAll" },
   { name = "separator" },
   { name = "Rows", items = rows },
+  { name = "Table", items = table_menu },
   { name = "Connection", items = connection },
   { name = "separator" },
 }

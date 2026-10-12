@@ -199,6 +199,34 @@ rows pane refreshes:
 The statement pane is a real file under `stdpath("data")`, not a scratch
 buffer, so the query you edited is still there tomorrow.
 
+`:IdeDbStructure` (or right-click → Table) answers the other half of reading
+somebody else's database — what the columns are, which is the key, and how the
+tables are joined:
+
+```
+-- orders
+
+columns
+  id           INTEGER  not null  pk, auto
+  customer_id  INTEGER  not null
+  total_cents  INTEGER  not null  default 0
+
+primary key
+  id
+
+foreign keys
+  customer_id → customers.id
+
+referenced by
+  order_lines.order_id → id
+
+indexes
+  orders_by_customer  (customer_id, placed_at)
+```
+
+All of it comes from JDBC's own metadata, so it works on every driver rather
+than on the two whose dialect someone remembered.
+
 | | |
 |---|---|
 | `<leader>DD` | Database explorer |

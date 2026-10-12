@@ -574,6 +574,117 @@ H.describe("paging the rows", function()
   end)
 end)
 
+H.describe("how a table is built", function()
+  -- The half of a database IDE that is not the data: sitting down with
+  -- somebody else's database means asking what the columns are, which is the
+  -- key, and how the tables are joined.
+  local RAW = {
+    "-- columns",
+    "id\tINTEGER\tnot null\t\tpk\tauto",
+    "customer_id\tINTEGER\tnot null\t\t\t",
+    "total_cents\tINTEGER\tnot null\t0\t\t",
+    "note\tVARCHAR(40)\tnull\t\t\t",
+    "-- primary key",
+    "id",
+    "-- foreign keys",
+    "customer_id\tcustomers\tid\torders_customer_fk",
+    "-- referenced by",
+    "order_lines\torder_id\tid\tlines_order_fk",
+    "-- indexes",
+    "orders_by_customer\t\tcustomer_id, placed_at",
+    "orders_email_uq\tunique\temail",
+  }
+
+  H.it("reads every section the runner prints", function()
+    local p = I.parse_structure(RAW)
+    H.eq(4, #p.columns)
+    H.eq({ name = "id", type = "INTEGER", null = "not null", pk = true, auto = true }, p.columns[1])
+    H.eq("0", p.columns[3].default, "a default is worth seeing")
+    H.eq("VARCHAR(40)", p.columns[4].type, "and so is the size")
+    H.eq({ "id" }, p.key)
+    H.eq({ column = "customer_id", table = "customers", target = "id", name = "orders_customer_fk" },
+      p.foreign[1])
+    H.eq({ table = "order_lines", column = "order_id", target = "id", name = "lines_order_fk" },
+      p.referenced[1])
+    H.eq(2, #p.indexes)
+    H.eq(true, p.indexes[2].unique)
+    H.eq("customer_id, placed_at", p.indexes[1].columns, "an index on (a, b) is not one on (b, a)")
+  end)
+
+  H.it("lays it out so it can be read aloud", function()
+    local out = I.render_structure("orders", I.parse_structure(RAW))
+    local text = table.concat(out, "\n")
+    H.matches("^%-%- orders", text)
+    H.matches("columns", text)
+    H.matches("id%s+INTEGER%s+not null%s+pk, auto", text)
+    H.matches("total_cents%s+INTEGER%s+not null%s+default 0", text)
+    H.matches("primary key\n  id", text)
+    H.matches("customer_id → customers%.id", text)
+    H.matches("order_lines%.order_id → id", text)
+    H.matches("orders_email_uq  unique", text)
+    for _, line in ipairs(out) do
+      H.ok(not line:match("%s$"), ("a trailing space makes a copy-paste dirty: %q"):format(line))
+    end
+  end)
+
+  H.it("says none rather than leaving a section out", function()
+    -- "no foreign keys" is an answer, and a missing heading reads as a bug.
+    local out = I.render_structure("thing", I.parse_structure({ "-- columns", "-- primary key",
+      "-- foreign keys", "-- referenced by", "-- indexes" }))
+    local text = table.concat(out, "\n")
+    for _, section in ipairs({ "primary key", "foreign keys", "referenced by", "indexes" }) do
+      H.matches(section, text)
+    end
+    H.eq(4, select(2, text:gsub("  none", "")), "each empty section should say so")
+  end)
+
+  H.it("asks a real database", function()
+    requires_jdbc()
+    local file = H.tmpdir("dbide-structure") .. "/shop.sqlite"
+    local sql = table.concat({
+      "create table customers (id integer primary key, email text not null unique);",
+      "create table orders (id integer primary key,",
+      "  customer_id integer not null references customers(id),",
+      "  total_cents integer not null default 0);",
+      "create index orders_by_customer on orders (customer_id);",
+      "create table order_lines (id integer primary key, order_id integer references orders(id));",
+    }, "\n")
+    H.eq(0, vim.system({ "sqlite3", file }, { stdin = sql, text = true }):wait(30000).code)
+
+    local c = { name = "shop", url = "jdbc:sqlite:" .. file }
+    local lines, err = require("kebab.db").structure(c, "orders")
+    H.ok(lines, tostring(err))
+    local p = I.parse_structure(lines)
+    H.eq({ "id" }, p.key)
+    H.eq(1, #p.foreign, "orders points at customers")
+    H.eq("customers", p.foreign[1].table)
+    H.eq(1, #p.referenced, "and order_lines points at orders")
+    H.eq("order_lines", p.referenced[1].table)
+    H.ok(#p.columns >= 3)
+    local names = vim.tbl_map(function(col) return col.name end, p.columns)
+    H.ok(vim.tbl_contains(names, "total_cents"), "got: " .. table.concat(names, ","))
+  end)
+
+  H.it("shows it where the rows go, with no pager", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = fixture()
+    I.layout(c)
+    H.ok(I.show_structure(c, "customers"))
+    local out
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then out = b end
+    end
+    H.ok(out, "the rows pane should be there")
+    local text = table.concat(vim.api.nvim_buf_get_lines(out, 0, -1, false), "\n")
+    H.matches("^%-%- customers", text)
+    H.matches("columns", text)
+    H.matches("full_name", text, "got: " .. text:sub(1, 160))
+    H.eq(nil, I.pager(c.url), "a structure is one answer, not a page of rows")
+  end)
+end)
+
 H.describe("running a statement from the editor", function()
   H.it("runs the one under the cursor and refreshes the rows", function()
     requires_jdbc()

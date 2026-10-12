@@ -705,6 +705,7 @@ end
 function M.setup()
   local commands = {
     IdeDbRun = { M.run_current, "Run the statement under the cursor" },
+    IdeDbStructure = { function() M.structure_prompt() end, "How a table is built: columns, keys, indexes" },
     IdeDbRunAll = { M.run_all, "Run every statement in this buffer" },
     IdeDbNextPage = { function() M.turn_page(1) end, "Next page of rows" },
     IdeDbPrevPage = { function() M.turn_page(-1) end, "Previous page of rows" },
@@ -716,6 +717,174 @@ function M.setup()
       spec[1]()
     end, { desc = spec[2] })
   end
+end
+
+-- ------------------------------------------------------------- structure
+--
+-- The half of a database IDE that is not the data. Sitting down with somebody
+-- else's database means asking what the columns are, which is the key, and how
+-- the tables are joined -- before any query gets written.
+
+---Split the runner's sections. Pure, so the shape is tested directly.
+---@param lines string[]
+---@return table sections
+function M.parse_structure(lines)
+  local out = { columns = {}, key = {}, foreign = {}, referenced = {}, indexes = {} }
+  local section
+  local names = {
+    ["-- columns"] = "columns",
+    ["-- primary key"] = "key",
+    ["-- foreign keys"] = "foreign",
+    ["-- referenced by"] = "referenced",
+    ["-- indexes"] = "indexes",
+  }
+  for _, line in ipairs(lines or {}) do
+    local header = names[vim.trim(line)]
+    if header then
+      section = header
+    elseif section and vim.trim(line) ~= "" then
+      local fields = vim.split(line, "\t", { plain = true })
+      if section == "key" then
+        for name in line:gmatch("[^,%s]+") do
+          out.key[#out.key + 1] = name
+        end
+      elseif section == "columns" then
+        out.columns[#out.columns + 1] = {
+          name = fields[1],
+          type = fields[2],
+          null = fields[3],
+          default = fields[4] ~= "" and fields[4] or nil,
+          pk = fields[5] == "pk",
+          auto = fields[6] == "auto",
+        }
+      elseif section == "foreign" then
+        out.foreign[#out.foreign + 1] =
+          { column = fields[1], table = fields[2], target = fields[3], name = fields[4] }
+      elseif section == "referenced" then
+        out.referenced[#out.referenced + 1] =
+          { table = fields[1], column = fields[2], target = fields[3], name = fields[4] }
+      elseif section == "indexes" then
+        out.indexes[#out.indexes + 1] =
+          { name = fields[1], unique = fields[2] == "unique", columns = fields[3] }
+      end
+    end
+  end
+  return out
+end
+
+---Lay the structure out so it can be read aloud to someone.
+---@param table_name string
+---@param parsed table
+---@return string[]
+function M.render_structure(table_name, parsed)
+  local out = { ("-- %s"):format(table_name), "" }
+  local function pad(text, to)
+    text = tostring(text or "")
+    return text .. string.rep(" ", math.max(0, to - vim.fn.strdisplaywidth(text)))
+  end
+
+  if #parsed.columns > 0 then
+    local w1, w2 = 0, 0
+    for _, col in ipairs(parsed.columns) do
+      w1 = math.max(w1, vim.fn.strdisplaywidth(col.name or ""))
+      w2 = math.max(w2, vim.fn.strdisplaywidth(col.type or ""))
+    end
+    out[#out + 1] = "columns"
+    for _, col in ipairs(parsed.columns) do
+      local notes = {}
+      if col.pk then
+        notes[#notes + 1] = "pk"
+      end
+      if col.auto then
+        notes[#notes + 1] = "auto"
+      end
+      if col.default then
+        notes[#notes + 1] = "default " .. col.default
+      end
+      out[#out + 1] = ("  %s  %s  %s%s"):format(
+        pad(col.name, w1), pad(col.type, w2), pad(col.null, 8),
+        #notes > 0 and ("  " .. table.concat(notes, ", ")) or "")
+    end
+    out[#out + 1] = ""
+  end
+
+  out[#out + 1] = "primary key"
+  out[#out + 1] = "  " .. (#parsed.key > 0 and table.concat(parsed.key, ", ") or "none")
+  out[#out + 1] = ""
+
+  out[#out + 1] = "foreign keys"
+  if #parsed.foreign == 0 then
+    out[#out + 1] = "  none"
+  end
+  for _, fk in ipairs(parsed.foreign) do
+    out[#out + 1] = ("  %s → %s.%s"):format(fk.column, fk.table, fk.target)
+  end
+  out[#out + 1] = ""
+
+  out[#out + 1] = "referenced by"
+  if #parsed.referenced == 0 then
+    out[#out + 1] = "  none"
+  end
+  for _, fk in ipairs(parsed.referenced) do
+    out[#out + 1] = ("  %s.%s → %s"):format(fk.table, fk.column, fk.target)
+  end
+  out[#out + 1] = ""
+
+  out[#out + 1] = "indexes"
+  if #parsed.indexes == 0 then
+    out[#out + 1] = "  none"
+  end
+  for _, index in ipairs(parsed.indexes) do
+    out[#out + 1] = ("  %s%s  (%s)"):format(index.name, index.unique and "  unique" or "", index.columns)
+  end
+  -- the padding is for alignment, not for the end of a line
+  for i, line in ipairs(out) do
+    out[i] = (line:gsub("%s+$", ""))
+  end
+  return out
+end
+
+---Ask which table, then show how it is built.
+---
+---The connection comes from the buffer when there is one, so in the SQL panes
+---it asks only for the table.
+function M.structure_prompt()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  local function go(conn)
+    local tables, err = db.tables(conn)
+    if not tables then
+      return vim.notify(tostring(err), vim.log.levels.ERROR)
+    end
+    if #tables == 0 then
+      return vim.notify(("%s has no tables"):format(conn.name), vim.log.levels.INFO)
+    end
+    vim.ui.select(tables, { prompt = ("Structure of which table in %s?"):format(conn.name) }, function(choice)
+      if choice then
+        M.show_structure(conn, choice)
+      end
+    end)
+  end
+  if c then
+    return go(c)
+  end
+  db.pick("Database", go)
+end
+
+---Show a table's structure where the rows go.
+---@param c kebab.DbConnection
+---@param table_name string
+function M.show_structure(c, table_name)
+  local lines, err = db.structure(c, table_name)
+  if not lines then
+    return M.failed(c, err)
+  end
+  M.layout(c)
+  local rendered = M.render_structure(table_name, M.parse_structure(lines))
+  -- no pager: this is one answer, not a page of rows
+  PAGES[c.url] = nil
+  M.show_rows(c, rendered)
+  return true
 end
 
 ---The table name on a dadbod-ui tree line, or nil.

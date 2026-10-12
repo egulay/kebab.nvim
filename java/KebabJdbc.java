@@ -81,6 +81,7 @@ public final class KebabJdbc {
         case "ping" -> ping(conn);
         case "tables" -> tables(conn);
         case "columns" -> columns(conn, args.length > 2 ? args[2] : null);
+        case "structure" -> structure(conn, args.length > 2 ? args[2] : null);
         case "schema" -> schema(conn);
         case "query" -> query(conn, readStdin());
         case "page" -> page(conn, args.length > 2 ? args[2] : null, readStdin());
@@ -176,6 +177,7 @@ public final class KebabJdbc {
         case "ping" -> ping(conn);
         case "tables" -> tables(conn);
         case "columns" -> columns(conn, arg);
+        case "structure" -> structure(conn, arg);
         case "schema" -> schema(conn);
         case "query" -> {
           Cursor.close(); // a new statement replaces the open result set
@@ -287,6 +289,152 @@ public final class KebabJdbc {
   }
 
   /** Everything completion needs, in one round trip. */
+  /**
+   * How a table is built: its columns, its key, what it points at, what points
+   * at it, and its indexes.
+   *
+   * <p>This is the half of a database IDE that is not the data. Reading
+   * somebody else's schema -- which is what you are doing when you sit down
+   * with their database -- means asking what the columns are, which of them is
+   * the key, and how the tables are joined. All of it comes from
+   * DatabaseMetaData, so it works on every driver rather than on the two whose
+   * dialect someone remembered.
+   *
+   * <p>Printed in labelled sections so the caller can split them without
+   * parsing SQL. Sections with nothing in them are still printed, because "no
+   * foreign keys" is an answer.
+   */
+  private static void structure(Connection conn, String table) throws SQLException {
+    if (table == null || table.isEmpty()) {
+      throw new UsageException("structure needs a table name");
+    }
+    String schema = null;
+    String name = table;
+    int dot = table.lastIndexOf('.');
+    if (dot > 0) {
+      schema = table.substring(0, dot);
+      name = table.substring(dot + 1);
+    }
+    DatabaseMetaData md = conn.getMetaData();
+    String schemaPattern = likeLiteral(md, schema);
+    String namePattern = likeLiteral(md, name);
+
+    // which columns are in the primary key, and in what order
+    List<String> key = new ArrayList<>();
+    try (ResultSet rs = md.getPrimaryKeys(null, schema, name)) {
+      java.util.TreeMap<Short, String> ordered = new java.util.TreeMap<>();
+      while (rs.next()) {
+        ordered.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
+      }
+      key.addAll(ordered.values());
+    }
+
+    System.out.println("-- columns");
+    try (ResultSet rs = md.getColumns(null, schemaPattern, namePattern, "%")) {
+      while (rs.next()) {
+        String column = rs.getString("COLUMN_NAME");
+        String type = rs.getString("TYPE_NAME");
+        int size = rs.getInt("COLUMN_SIZE");
+        int digits = rs.getInt("DECIMAL_DIGITS");
+        boolean hasDigits = !rs.wasNull();
+        // A type is useless without its size for char and decimal columns:
+        // varchar(20) and varchar(2000) are not the same design decision.
+        String sized = type;
+        if (size > 0 && type != null) {
+          String lower = type.toLowerCase(java.util.Locale.ROOT);
+          if (lower.contains("char") || lower.contains("binary")) {
+            sized = type + "(" + size + ")";
+          } else if (hasDigits && digits > 0 && (lower.contains("dec") || lower.contains("numeric"))) {
+            sized = type + "(" + size + "," + digits + ")";
+          }
+        }
+        String fallback = rs.getString("COLUMN_DEF");
+        String auto = "YES".equals(safe(rs, "IS_AUTOINCREMENT")) ? "auto" : "";
+        System.out.println(
+            column
+                + "\t"
+                + sized
+                + "\t"
+                + ("YES".equals(rs.getString("IS_NULLABLE")) ? "null" : "not null")
+                + "\t"
+                + (fallback == null ? "" : fallback.trim())
+                + "\t"
+                + (key.contains(column) ? "pk" : "")
+                + "\t"
+                + auto);
+      }
+    }
+
+    System.out.println("-- primary key");
+    if (!key.isEmpty()) {
+      System.out.println(String.join(", ", key));
+    }
+
+    System.out.println("-- foreign keys");
+    try (ResultSet rs = md.getImportedKeys(null, schema, name)) {
+      while (rs.next()) {
+        System.out.println(
+            rs.getString("FKCOLUMN_NAME")
+                + "\t"
+                + qualify(rs.getString("PKTABLE_SCHEM"), rs.getString("PKTABLE_NAME"))
+                + "\t"
+                + rs.getString("PKCOLUMN_NAME")
+                + "\t"
+                + safe(rs, "FK_NAME"));
+      }
+    }
+
+    System.out.println("-- referenced by");
+    try (ResultSet rs = md.getExportedKeys(null, schema, name)) {
+      while (rs.next()) {
+        System.out.println(
+            qualify(rs.getString("FKTABLE_SCHEM"), rs.getString("FKTABLE_NAME"))
+                + "\t"
+                + rs.getString("FKCOLUMN_NAME")
+                + "\t"
+                + rs.getString("PKCOLUMN_NAME")
+                + "\t"
+                + safe(rs, "FK_NAME"));
+      }
+    }
+
+    System.out.println("-- indexes");
+    try (ResultSet rs = md.getIndexInfo(null, schema, name, false, true)) {
+      // One row per column, so they are gathered per index and in position
+      // order -- an index on (a, b) is not the same index as one on (b, a).
+      java.util.LinkedHashMap<String, java.util.TreeMap<Short, String>> byName =
+          new java.util.LinkedHashMap<>();
+      java.util.LinkedHashMap<String, Boolean> unique = new java.util.LinkedHashMap<>();
+      while (rs.next()) {
+        String index = rs.getString("INDEX_NAME");
+        if (index == null) {
+          continue; // tableIndexStatistic rows carry no name
+        }
+        byName.computeIfAbsent(index, k -> new java.util.TreeMap<>())
+            .put(rs.getShort("ORDINAL_POSITION"), rs.getString("COLUMN_NAME"));
+        unique.putIfAbsent(index, !rs.getBoolean("NON_UNIQUE"));
+      }
+      for (java.util.Map.Entry<String, java.util.TreeMap<Short, String>> entry : byName.entrySet()) {
+        System.out.println(
+            entry.getKey()
+                + "\t"
+                + (Boolean.TRUE.equals(unique.get(entry.getKey())) ? "unique" : "")
+                + "\t"
+                + String.join(", ", entry.getValue().values()));
+      }
+    }
+  }
+
+  /** A metadata column a driver may not have: absent is not a failure. */
+  private static String safe(ResultSet rs, String column) {
+    try {
+      String value = rs.getString(column);
+      return value == null ? "" : value;
+    } catch (SQLException e) {
+      return "";
+    }
+  }
+
   private static void schema(Connection conn) throws SQLException {
     DatabaseMetaData md = conn.getMetaData();
     List<String> names = new ArrayList<>();
