@@ -22,6 +22,10 @@ DRY=0
 DO_PATH=1
 DO_SPEC=1
 DO_DOCTOR=1
+# install.sh runs the same steps with more after them, so its closing summary
+# is the one that should be read; two "Done" sections in one command look like
+# two installers stacked.
+SHOW_SUMMARY=1
 FORCE=0
 
 usage() {
@@ -35,6 +39,7 @@ Options:
   --no-path      do not touch $BIN_DIR
   --no-spec      do not write the Neovim plugin spec
   --no-doctor    skip the dependency check at the end
+  --no-summary   skip the closing summary (install.sh prints its own)
   --force        overwrite an existing plugin spec without asking
   --yes          answer yes to everything (same as --force); for CI, and for
                  an install you do not want to sit through
@@ -52,6 +57,7 @@ while [ $# -gt 0 ]; do
     --no-path) DO_PATH=0; shift ;;
     --no-spec) DO_SPEC=0; shift ;;
     --no-doctor) DO_DOCTOR=0; shift ;;
+    --no-summary) SHOW_SUMMARY=0; shift ;;
     --force | --yes) FORCE=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'setup: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -267,7 +273,9 @@ if [ "$DO_DOCTOR" -eq 1 ] && [ "$DRY" -eq 0 ]; then
   fi
 fi
 
-step "Done"
-say "Start Neovim. Mason installs the tooling on first launch."
-say "A Maven project takes about a minute to index the first time."
-say "Keymaps: :IdeCheatsheet   Everything else: :Ide<Tab>"
+if [ "$SHOW_SUMMARY" -eq 1 ]; then
+  step "Done"
+  say "Start Neovim. Mason installs the tooling on first launch."
+  say "A Maven project takes about a minute to index the first time."
+  say "Keymaps: :IdeCheatsheet   Everything else: :Ide<Tab>"
+fi

@@ -101,7 +101,7 @@ if [ "$DRY" -eq 1 ]; then args+=(--dry-run); fi
 # doctor runs at the end of this script instead, after the plugins are in --
 # otherwise it reports the language servers as missing when they are simply
 # not installed yet.
-args+=(--no-doctor)
+args+=(--no-doctor --no-summary)
 
 if [ "$DRY" -eq 1 ] && [ ! -x "$REPO/setup.sh" ]; then
   note "would run $REPO/setup.sh ${args[*]}"
