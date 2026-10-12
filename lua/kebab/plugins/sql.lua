@@ -40,6 +40,30 @@ return {
       local data = vim.fn.stdpath("data")
       vim.g.db_ui_save_location = data .. "/kebab/sql/queries"
       vim.g.db_ui_tmp_query_location = data .. "/kebab/sql/tmp"
+
+      -- A double click opens the node under the pointer.
+      --
+      -- dadbod-ui maps <CR> and `o` and nothing else: it has no mouse support
+      -- at all. This layer is explicitly for keyboard *and* mouse users, and
+      -- without this the explorer is dead to a mouse -- clicking a connection
+      -- does nothing, which is not what anyone arriving from a graphical IDE
+      -- will read as "no mouse support".
+      --
+      -- The <LeftMouse> prefix is load-bearing: it is what moves the cursor to
+      -- the clicked line before the action runs. Without it the action applies
+      -- to wherever the cursor happened to be. `remap` likewise -- <Plug>
+      -- mappings do not fire from a noremap rhs.
+      vim.api.nvim_create_autocmd("FileType", {
+        group = vim.api.nvim_create_augroup("kebab_dbui_mouse", { clear = true }),
+        pattern = "dbui",
+        callback = function(ev)
+          vim.keymap.set("n", "<2-LeftMouse>", "<LeftMouse><Plug>(DBUI_SelectLine)", {
+            buffer = ev.buf,
+            remap = true,
+            desc = "Open the node under the pointer",
+          })
+        end,
+      })
     end,
     -- A spec with only `keys` owns commands that do not exist until the key is
     -- pressed, so `nvim -c DBUI` -- which is what `kebab db` runs -- failed

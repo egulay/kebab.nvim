@@ -321,6 +321,35 @@ H.describe("credentials", function()
   end)
 end)
 
+H.describe("the explorer and the mouse", function()
+  H.it("opens the node under a double click", function()
+    -- dadbod-ui maps <CR> and `o` and nothing else -- it has no mouse support
+    -- at all, so the explorer was dead to a mouse: clicking a connection did
+    -- nothing. This layer is for keyboard *and* mouse users.
+    vim.cmd("enew!")
+    vim.bo.filetype = "dbui"
+    local found
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+      if m.lhs == "<2-LeftMouse>" then found = m end
+    end
+    H.ok(found, "a dbui buffer should answer a double click")
+    H.eq("<LeftMouse><Plug>(DBUI_SelectLine)", found.rhs)
+    -- The <LeftMouse> prefix moves the cursor to the clicked line first;
+    -- without it the action applies to wherever the cursor already was.
+    H.matches("^<LeftMouse>", found.rhs)
+    -- And it has to be remappable, or the <Plug> never fires.
+    H.eq(0, found.noremap, "a <Plug> rhs cannot be noremap")
+  end)
+
+  H.it("leaves other buffers alone", function()
+    vim.cmd("enew!")
+    vim.bo.filetype = "sql"
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(0, "n")) do
+      H.ok(m.lhs ~= "<2-LeftMouse>", "only the tree should take a double click")
+    end
+  end)
+end)
+
 H.describe("publishing to dadbod", function()
   H.it("fills vim.g.dbs so the explorer lists the connections", function()
     with_store(function()
