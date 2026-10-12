@@ -80,7 +80,7 @@ local flat = walk(menu, "", { leaves = {}, separators = 0 })
 
 H.describe("tree menu", function()
   -- A file-scope require("neo-tree.sources.manager") used to make this module
-  -- unloadable before lazy had started the plugin. CLAUDE.md lists that trap.
+  -- unloadable before lazy had started the plugin. It is one of this repo's recorded traps.
   --
   -- This has to run in a *fresh process*. Clearing package.loaded and requiring
   -- again proved nothing: this spec loads neo-tree at file scope, and

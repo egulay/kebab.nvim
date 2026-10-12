@@ -141,8 +141,8 @@ by the verification pass is fixed, down to the medium and low ones and the
 false tests among them. The suite went from 887 assertions to 1051.
 
 What it found, in one line each, is in the git log. The categories worth
-remembering are in CLAUDE.md under "Rules learned the hard way" — they are the
-traps, not the fixes.
+remembering are kept with the working notes beside this repo, not in it —
+they are the traps, not the fixes.
 
 Three things it surfaced that are worth keeping in mind for any new code here:
 

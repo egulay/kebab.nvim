@@ -697,7 +697,7 @@ process. plenary's busted runner spawns children with a minimal init, which
 would hide exactly the bugs this layer has: integration bugs, where a command
 belongs to a plugin that has not loaded or a global is not set yet.
 
-Two rules the suite follows, both from CLAUDE.md. It never opens a file the user
+Two rules the suite follows. It never opens a file the user
 owns, and it runs with `-n` so a killed session cannot leave an `E325` swap file
 behind. And it asserts on effects — a file created, a window opened, a file
 reverted — not on modules loading.

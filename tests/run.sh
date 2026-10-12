@@ -4,7 +4,7 @@
 #   tests/run.sh                 everything
 #   tests/run.sh project         only specs whose name contains "project"
 #
-# Runs headless with -n (no swap file). CLAUDE.md explains why that matters:
+# Runs headless with -n (no swap file), which matters because:
 # a killed headless session that had swap enabled leaves an E325 landmine in
 # the user's real files.
 set -uo pipefail

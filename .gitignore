@@ -3,3 +3,9 @@
 
 # agent scratch; may quote file contents, so never publish it
 .claude/
+
+# Notes to the assistant working on this repo. Local only: it accumulated
+# incident narrative -- what was broken, what was said about it -- which is a
+# working diary, not documentation of how the code works. DESIGN.md is where
+# the reasoning that belongs to the code lives.
+CLAUDE.md

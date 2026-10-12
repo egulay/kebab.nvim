@@ -1,7 +1,7 @@
 -- Behavioural half of the editor-menu sweep.
 --
 -- menu_editor_spec proves every entry's target *exists*. That is necessary and
--- not sufficient: CLAUDE.md's rule is that "the menu renders" was never the
+-- not sufficient: the rule in this repo is that "the menu renders" was never the
 -- same as "the entries do anything". These tests run the entries that have an
 -- observable effect and assert on the effect.
 local H = ...

@@ -151,7 +151,7 @@ local run = {
   { name = "Run Tests in File", cmd = run_test("file", "run tests in file"), rtxt = "<leader>tt" },
   -- Not "Run Test..." -- the ellipsis promised a dialog, and only Java gets
   -- one. <leader>tT is "Run All Test Files" in LazyVim's neotest keys, and in
-  -- a Java buffer jdtls owns the key and offers a picker instead (CLAUDE.md:
+  -- a Java buffer jdtls owns the key and offers a picker instead (a trap recorded in the working notes:
   -- neotest has no Java adapter here). The name now describes what happens in
   -- every filetype but Java, and the label says what Java does.
   {

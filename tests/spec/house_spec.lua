@@ -1,6 +1,6 @@
 -- The house rules, enforced rather than remembered.
 --
--- CLAUDE.md says no real project, client or database names anywhere in this
+-- The rule: no real project, client or database names anywhere in this
 -- repository -- not in the README, not in a comment, not in a fixture. It has
 -- been asked for three times and broken three times, the last one putting a
 -- client's project name in the public README and in four commit messages. A

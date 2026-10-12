@@ -14,7 +14,12 @@ pass=0
 # depends on a server being up or on anyone's credentials.
 db="$work/shop.sqlite"
 sqlite3 "$db" "CREATE TABLE customers (id INTEGER PRIMARY KEY, full_name TEXT);
-               INSERT INTO customers (full_name) VALUES ('Ada Lovelace');" || exit 1
+               INSERT INTO customers (full_name) VALUES ('Ada Lovelace');
+               -- a second table with several rows, for the pager: with one row
+               -- there is no next page and Next correctly refuses to move,
+               -- which failed the click case and looked like a broken button
+               CREATE TABLE pages (id INTEGER PRIMARY KEY, label TEXT);
+               INSERT INTO pages (label) VALUES ('alpha'),('beta'),('gamma');" || exit 1
 
 export KEBAB_DB_STORE="$work/connections.json"
 cat > "$KEBAB_DB_STORE" <<JSON
@@ -304,7 +309,7 @@ vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 vim.g.kebab_db_page_size = 1
 require("kebab.cli").db("")
 vim.defer_fn(function()
-  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "pages")
 end, 7000)
 vim.defer_fn(function()
   local out = {}
