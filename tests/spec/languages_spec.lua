@@ -353,6 +353,9 @@ end)
 
 H.describe("JavaScript as well as TypeScript", function()
   H.it("scaffolds a plain JavaScript node project", function()
+    if vim.fn.executable("npm") == 0 then
+      H.skip("npm is not on PATH, and `npm init` is what makes the project")
+    end
     local project = require("kebab.project")
     local dest = H.tmpdir("js-new") .. "/jsthing"
     local result
@@ -372,6 +375,9 @@ H.describe("JavaScript as well as TypeScript", function()
   end)
 
   H.it("still scaffolds TypeScript, with a tsconfig", function()
+    if vim.fn.executable("npm") == 0 then
+      H.skip("npm is not on PATH, and `npm init` is what makes the project")
+    end
     local project = require("kebab.project")
     local dest = H.tmpdir("ts-new") .. "/tsthing"
     local result

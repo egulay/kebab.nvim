@@ -1,0 +1,70 @@
+# The suite, on a machine that is not the one this was written on.
+#
+# Why this exists: tests/run.sh boots the *real* user config on purpose,
+# because the bugs this layer has are integration bugs. That makes a local
+# pass evidence about one machine -- one Neovim, one font, one terminal, one
+# plugin set. tests/ci/bootstrap.sh builds a config from nothing in a
+# throwaway HOME (the LazyVim starter, then ./setup.sh, then the plugins) and
+# runs the suite against that, which is what this job does.
+#
+# Not here: tests/pty, which drives a real terminal and a real mouse. It needs
+# a pty and ~4 minutes, and is run by hand before a release.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the README states, and whatever is current. A release
+        # that only works on the newest Neovim is a release that breaks on
+        # the distribution version. The floor is 0.12 because aerial and
+        # refactoring refuse to initialise below it -- which is what running
+        # this on 0.11.4 in a container proved.
+        neovim: ["v0.12.0", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Neovim ${{ matrix.neovim }}
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      # What the specs need beyond Neovim: a JDK for the database bridge,
+      # sqlite3 for a throwaway database, inotify-tools for :IdeFollow (it
+      # shells out to inotifywait), unzip and curl for the scaffolds.
+      - name: tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            sqlite3 inotify-tools unzip curl jq fontconfig \
+            python3-venv nodejs npm
+          # lazygit: LazyVim binds <leader>gg only when it is installed, and
+          # three menu entries advertise that key
+          # from the redirect, not the API: the API is rate limited per IP
+          LG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+                https://github.com/jesseduffield/lazygit/releases/latest | sed 's#.*/tag/v##')
+          curl -fsSL -o /tmp/lazygit.tar.gz \
+            "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${LG}_Linux_x86_64.tar.gz"
+          sudo tar -C /usr/local/bin -xzf /tmp/lazygit.tar.gz lazygit
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: install the way a stranger does, then run the suite
+        run: ./tests/ci/bootstrap.sh
+
+      - name: the install is idempotent
+        run: |
+          # A second run must change nothing and must not need an answer.
+          KEBAB_CI_KEEP=0 ./tests/ci/bootstrap.sh

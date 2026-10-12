@@ -12,6 +12,13 @@ local menus = require("kebab.menus.editor")
 local LEADER = (vim.g.mapleader == " " or vim.g.mapleader == nil) and "<Space>" or vim.g.mapleader
 
 -- Keys that are native Vim, not mappings. Nothing binds them and nothing should.
+-- Keys whose mapping exists only when an external tool does. Found by
+-- running the suite in a container: three entries failed as "not mapped" on a
+-- machine with no lazygit, which is information about the machine.
+local CONDITIONAL = {
+  ["<leader>gg"] = "lazygit",
+}
+
 local BUILTIN = {
   ["u"] = "native undo",
   ["<C-r>"] = "native redo",
@@ -187,6 +194,15 @@ H.describe("menu shortcut targets", function()
           ("%s is listed as buffer-local (%s) but is mapped globally -- remove it from BUFFER_LOCAL")
             :format(rtxt, BUFFER_LOCAL[rtxt]))
         return
+      end
+
+      -- A key some plugin only binds when the tool it drives is installed.
+      -- LazyVim's <leader>gg is lazygit's: with no lazygit on PATH there is
+      -- no mapping, and the menu entry says so when clicked. Skipped rather
+      -- than failed, because the machine is what is missing, not the layer.
+      local needs = CONDITIONAL[rtxt]
+      if needs and vim.fn.executable(needs) == 0 and not is_mapped(rtxt) then
+        H.skip(("%s is bound by its plugin only when %s is installed"):format(rtxt, needs))
       end
 
       H.ok(is_mapped(rtxt),
