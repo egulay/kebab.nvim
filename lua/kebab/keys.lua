@@ -9,6 +9,13 @@
 -- tests/spec/menu_shortcuts_spec.lua checks against the real mappings. This
 -- module is the one place that renders it for a human, so the two cannot
 -- drift.
+--
+-- Two separators, and the difference between them is the whole point: keys
+-- pressed one after the other are joined with an arrow (`Space -> D -> D`),
+-- keys held together with a plus (`Ctrl+Enter`). Asked for directly, after
+-- "Space D D" turned out to read like three things to hold down. The arrow is
+-- U+2192, which the monospace fonts here all carry; `vim.g.kebab_key_arrow`
+-- replaces it (`"->"` for a terminal without it).
 local M = {}
 
 -- Named keys. Anything in angle brackets that is not a modifier.
@@ -34,6 +41,16 @@ local NAMED = {
 }
 
 local MODIFIER = { c = "Ctrl", a = "Alt", m = "Alt", s = "Shift", d = "Cmd" }
+
+---The separator between keys pressed one after the other.
+---@return string
+function M.arrow()
+  local override = vim.g.kebab_key_arrow
+  if type(override) == "string" and override ~= "" then
+    return override
+  end
+  return "→"
+end
 
 ---The leader key, named the way it is printed on a keyboard.
 ---@return string
@@ -89,7 +106,9 @@ end
 
 ---What to press, for a key specification.
 ---
----`<leader>DD` -> "Space D D", `<C-CR>` -> "Ctrl+Enter", `]p` -> "] p".
+---`<leader>DD` -> "Space → D → D", `<C-CR>` -> "Ctrl+Enter",
+---`]p` -> "] → p". A plus means hold them together, an arrow means one
+---after the other.
 ---A leading `:` means it is a command, not a key, and is left alone.
 ---@param spec string
 ---@return string
@@ -98,6 +117,13 @@ function M.human(spec)
     return ""
   end
   if spec:sub(1, 1) == ":" then
+    return spec
+  end
+  -- A key specification never contains a literal space -- the spacebar is
+  -- `<space>` -- so anything that does is prose or a shell command, and
+  -- rendering it as keystrokes spells it out one letter at a time. A pass over
+  -- the cheatsheet did exactly that and shipped `k e b a b   d b   name`.
+  if spec:find(" ", 1, true) then
     return spec
   end
 
@@ -126,7 +152,7 @@ function M.human(spec)
       i = i + 1
     end
   end
-  return table.concat(out, " ")
+  return table.concat(out, " " .. M.arrow() .. " ")
 end
 
 ---Rewrite a menu's `rtxt` into what a person presses, keeping the canonical

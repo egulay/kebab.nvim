@@ -1,10 +1,15 @@
 # Neovim as an IDE — keymap reference
 
-**How to read these.** Each shortcut is written as the keys you press, in
-order, one after another — `Space c a` means press Space, then c, then a. Not
-together. A capital letter means hold Shift: `Space f S` is Space, f,
-Shift+S. `Ctrl+Enter` means hold Ctrl and press Enter. Anything starting with
-`:` is a command you type, ending with Enter.
+**How to read these.** An arrow means one key after the other. A plus means
+hold them at the same time.
+
+| Written | What you do |
+|---|---|
+| `Space → c → a` | press Space, let go, press c, let go, press a |
+| `Ctrl+Enter` | hold Ctrl and press Enter, at the same time |
+| `Space → Ctrl+r` | press Space, let go, then hold Ctrl and press r |
+| `Space → f → S` | a capital letter means hold Shift: Space, f, then Shift+S |
+| `:IdeFollow` | a command you type, ending with Enter |
 
 Nothing to memorise: press `Space` and wait half a second, and a panel lists
 everything available, grouped, with descriptions. Right-click shows a menu with
@@ -16,38 +21,38 @@ Nothing here is from memory — every binding below was read out of the live con
 
 | Was | Here | |
 |---|---|---|
-| `Alt+Enter` | `Space c a` | Code action — the one you'll use most |
-| `Ctrl+B` | `g d` | Go to definition |
-| `Alt+F7` | `g r` | Find usages |
-| `Ctrl+Alt+B` | `g I` | Go to implementation |
-| `Ctrl+Shift+B` | `g y` | Go to type definition |
+| `Alt+Enter` | `Space → c → a` | Code action — the one you'll use most |
+| `Ctrl+B` | `g → d` | Go to definition |
+| `Alt+F7` | `g → r` | Find usages |
+| `Ctrl+Alt+B` | `g → I` | Go to implementation |
+| `Ctrl+Shift+B` | `g → y` | Go to type definition |
 | `Ctrl+Q` | `K` | Quick docs (twice to enter the window) |
-| `Shift+Shift` | `Space Space` | Find file |
-| `Ctrl+Shift+F` | `Space /` | Find in project |
-| `Ctrl+F12` | `Space c s` | File structure (Aerial) |
-| `Ctrl+Alt+Shift+N` | `Space s S` | Go to symbol in project |
-| `Ctrl+E` | `Space f r` | Recent files |
-| `Ctrl+Tab` | `Space b b` | Previous buffer |
-| `Alt+1` | `Space e` | Project tree (opens by itself; this toggles it) |
-| `F2` | `] d` / `[ d` | Next / previous diagnostic |
-| Problems | `Space x x` | Diagnostics list (Trouble) |
-| Recent projects | `Space f p` | Project switcher |
-| Git tool window | `Space g g` | lazygit |
-| `Alt+Insert` | `Space c g` | Generate (constructor, getters, toString, override) |
-| Find action / command palette | `Space s C` | Every command by name |
-| `Ctrl+Alt+S` → Keymap | `Space s k` | Search the keymaps |
+| `Shift+Shift` | `Space → Space` | Find file |
+| `Ctrl+Shift+F` | `Space → /` | Find in project |
+| `Ctrl+F12` | `Space → c → s` | File structure (Aerial) |
+| `Ctrl+Alt+Shift+N` | `Space → s → S` | Go to symbol in project |
+| `Ctrl+E` | `Space → f → r` | Recent files |
+| `Ctrl+Tab` | `Space → b → b` | Previous buffer |
+| `Alt+1` | `Space → e` | Project tree (opens by itself; this toggles it) |
+| `F2` | `] → d` / `[ → d` | Next / previous diagnostic |
+| Problems | `Space → x → x` | Diagnostics list (Trouble) |
+| Recent projects | `Space → f → p` | Project switcher |
+| Git tool window | `Space → g → g` | lazygit |
+| `Alt+Insert` | `Space → c → g` | Generate (constructor, getters, toString, override) |
+| Find action / command palette | `Space → s → C` | Every command by name |
+| `Ctrl+Alt+S` → Keymap | `Space → s → k` | Search the keymaps |
 
 ## Projects
 
 | | |
 |---|---|
-| `Space p n` | New Project (wizard) |
+| `Space → p → n` | New Project (wizard) |
 | `:IdeInitHere` | Scaffold into the folder you already made |
-| `Space p o` | Open Project (scans the configured project roots) |
-| `Space f p` | Recent projects |
-| `Space p r` | Restore session for this project |
-| `Space p d` | Add a dependency to this project |
-| `Space p k` | This cheatsheet (also `:IdeCheatsheet`) |
+| `Space → p → o` | Open Project (scans the configured project roots) |
+| `Space → f → p` | Recent projects |
+| `Space → p → r` | Restore session for this project |
+| `Space → p → d` | Add a dependency to this project |
+| `Space → p → k` | This cheatsheet (also `:IdeCheatsheet`) |
 
 The dashboard (bare `nvim`) also has `p` Open Project and `N` New Project.
 
@@ -57,9 +62,9 @@ editor first:
 | | |
 |---|---|
 | `kebab` | open the IDE here, tree showing |
-| `k e b a b   o p e n   name` | open a project by name |
-| `k e b a b   n e w   name   - - t y p e   s p r i n g` | create one without being asked anything |
-| `k e b a b   n e w   n   - - t y p e   g o   - - m o d u l e   g i t h u b . c o m / y o u / n` | any prompt is `--name value` |
+| `kebab open name` | open a project by name |
+| `kebab new name --type spring` | create one without being asked anything |
+| `kebab new n --type go --module github.com/you/n` | any prompt is `--name value` |
 | `kebab types --prompts` | what each type asks you |
 | `kebab list` / `kebab types` | what exists / what can be created |
 | `kebab doctor` | check the install; non-zero only if something required is missing |
@@ -70,7 +75,7 @@ rspec), Flutter, Go module, Rust (cargo), Python (venv + pyproject), Node
 
 ### Generating code
 
-`Space c g`, or `:IdeGenerate <name>`. Needs a language server attached —
+`Space → c → g`, or `:IdeGenerate <name>`. Needs a language server attached —
 in Java that means waiting for jdtls to finish importing the project.
 
 | | |
@@ -87,10 +92,10 @@ in Java that means waiting for jdtls to finish importing the project.
 
 | | |
 |---|---|
-| `Space f N` | New file from a template (`:IdeNewFile`) |
-| `Space f S` | New scratch file (`:IdeScratch http`, `sql`, `go`, …) |
-| `Space f s` | Reopen a scratch file |
-| `Space p f` | Generate a project file (`.gitignore`, Dockerfile, CI, `.editorconfig`) |
+| `Space → f → N` | New file from a template (`:IdeNewFile`) |
+| `Space → f → S` | New scratch file (`:IdeScratch http`, `sql`, `go`, …) |
+| `Space → f → s` | Reopen a scratch file |
+| `Space → p → f` | Generate a project file (`.gitignore`, Dockerfile, CI, `.editorconfig`) |
 
 A Java template fills the package line in from the directory. The JUnit
 template writes into `src/test/java` with the same package, named after the
@@ -106,9 +111,9 @@ project:
 
 | | |
 |---|---|
-| `Space o r` | Run one (`:IdeRunConfig`) |
-| `Space o e` | Edit them (`:IdeRunConfigEdit`, writes an example first time) |
-| `Space o o` | Every task, project configurations first |
+| `Space → o → r` | Run one (`:IdeRunConfig`) |
+| `Space → o → e` | Edit them (`:IdeRunConfigEdit`, writes an example first time) |
+| `Space → o → o` | Every task, project configurations first |
 
 ```json
 {
@@ -126,7 +131,7 @@ project:
 
 ### Adding a dependency
 
-`Space p d`, or `:IdeAddDependency <what>`. `:IdeAddDependency!` adds it as a
+`Space → p → d`, or `:IdeAddDependency <what>`. `:IdeAddDependency!` adds it as a
 dev dependency where the ecosystem has the idea.
 
 | In a | Type | and it |
@@ -134,7 +139,7 @@ dev dependency where the ecosystem has the idea.
 | Maven project | `data-jpa` | adds `spring-boot-starter-data-jpa`, no version needed |
 | Maven project | `org.flywaydb:flyway-core:10.17.0` | adds it with that version |
 | Flutter project | `provider` | runs `flutter pub add provider` |
-| Node project | `z o d` | runs `npm install zod` |
+| Node project | `z → o → d` | runs `npm install zod` |
 | Python project | `httpx` | runs `uv add httpx`, or pip into `.venv` |
 | Gradle project | `data-jpa` | edits `dependencies { }`, Kotlin or Groovy dialect |
 | Go project | `github.com/go-chi/chi/v5` | runs `go get` |
@@ -154,23 +159,23 @@ twice.
 
 | | |
 |---|---|
-| `Space o o` | Run task (Maven, Flutter, Python, npm scripts) |
-| `Space o w` | Task list |
-| `Space o t` | Task action (restart, stop, open output) |
+| `Space → o → o` | Run task (Maven, Flutter, Python, npm scripts) |
+| `Space → o → w` | Task list |
+| `Space → o → t` | Task action (restart, stop, open output) |
 
 Registered automatically when the project matches: `mvn spring-boot:run`,
 `mvn test`, `mvn package`, `mvn clean install`, `flutter run/test/pub get/
-analyze`, `p y t h o n   file`, `pytest`. npm scripts come from `package.json`.
+analyze`, `python file`, `pytest`. npm scripts come from `package.json`.
 A project's `.vscode/launch.json` is loaded into nvim-dap if present.
 
 ## Flutter (in a .dart buffer)
 
 | | |
 |---|---|
-| `Space F r` / `Space F q` | Run / Quit |
-| `Space F h` / `Space F R` | Hot reload / Hot restart |
-| `Space F d` / `Space F e` | Devices / Emulators |
-| `Space F l` / `Space F o` | Dev log / Outline |
+| `Space → F → r` / `Space → F → q` | Run / Quit |
+| `Space → F → h` / `Space → F → R` | Hot reload / Hot restart |
+| `Space → F → d` / `Space → F → e` | Devices / Emulators |
+| `Space → F → l` / `Space → F → o` | Dev log / Outline |
 
 ## Java tests
 
@@ -179,7 +184,7 @@ neotest everywhere else. neotest has no Java adapter, so a single backend would
 report "no tests found" on a file full of them.
 
 jdtls owns these in Java buffers (neotest is not used there):
-`Space t r` nearest test · `Space t t` whole class · `Space t T` pick test.
+`Space → t → r` nearest test · `Space → t → t` whole class · `Space → t → T` pick test.
 
 ## Project tree & mouse
 
@@ -191,7 +196,7 @@ The tree opens by itself on the left. Mouse is enabled (`mouse=a`).
 | double click a file | open it |
 | `Enter` | open file / toggle folder |
 | drag the divider | resize the pane |
-| `Ctrl+w >` / `Ctrl+w <` | resize by keyboard |
+| `Ctrl+w → >` / `Ctrl+w → <` | resize by keyboard |
 | `a` / `A` | new file / new folder |
 | `r` / `d` | rename / delete |
 | `y` / `x` / `p` | copy / cut / paste |
@@ -203,11 +208,11 @@ Git, on the highlighted file:
 
 | | |
 |---|---|
-| `g a` / `g u` | stage / unstage |
-| `g t` | toggle staged |
-| `g r` | revert |
-| `g c` / `g p` / `g l` | commit / push / pull |
-| `Space g e` | git status tree |
+| `g → a` / `g → u` | stage / unstage |
+| `g → t` | toggle staged |
+| `g → r` | revert |
+| `g → c` / `g → p` / `g → l` | commit / push / pull |
+| `Space → g → e` | git status tree |
 
 Because `g` is now a prefix in the tree, `gg` (jump to top) pauses briefly
 before it fires.
@@ -223,7 +228,7 @@ Terminal Neovim has no always-visible menu bar, so this is a popup instead.
   Git submenu: stage / unstage / **Revert / Discard Changes** (restores
   tracked files *and* deletes untracked ones, with one confirmation) /
   undo last commit / commit / push / pull
-- **`Space M`** — same editor menu from the keyboard
+- **`Space → M`** — same editor menu from the keyboard
 - Inside a menu: `h` / `l` move between levels, `Enter` runs, `q` closes
 
 Each entry shows its keybinding on the right, so the menu doubles as a way to
@@ -241,7 +246,7 @@ If nothing appears, the language server has not attached yet; check `:LspInfo`.
 | `Ctrl+Space` | Force the menu open, then toggle the doc panel |
 | `Ctrl+e` | Dismiss |
 | `Ctrl+b` / `Ctrl+f` | Scroll the documentation popup |
-| `T a b` / `Shift+Tab` | Jump between snippet placeholders |
+| `Tab` / `Shift+Tab` | Jump between snippet placeholders |
 | `Ctrl+k` | Toggle signature help (parameter hints) |
 
 Documentation auto-opens after 200ms on the highlighted item, and brackets are
@@ -251,18 +256,18 @@ inserted automatically when you accept a function.
 
 | | |
 |---|---|
-| `Space c r` | Rename (live preview) |
-| `Space c f` | Format buffer |
-| `Space c o` | Organize imports (Java) |
-| `Space r f` | Extract function |
-| `Space r F` | Extract function to file |
-| `Space r x` | Extract variable |
-| `Space r i` | Inline variable |
-| `Space r s` | Select refactor (menu) |
-| `Space c x v` | Extract variable (Java/jdtls) |
-| `Space c x c` | Extract constant (Java/jdtls) |
-| `Space c x m` | Extract method (Java, visual mode) |
-| `Space c g s` | Go to super (Java) |
+| `Space → c → r` | Rename (live preview) |
+| `Space → c → f` | Format buffer |
+| `Space → c → o` | Organize imports (Java) |
+| `Space → r → f` | Extract function |
+| `Space → r → F` | Extract function to file |
+| `Space → r → x` | Extract variable |
+| `Space → r → i` | Inline variable |
+| `Space → r → s` | Select refactor (menu) |
+| `Space → c → x → v` | Extract variable (Java/jdtls) |
+| `Space → c → x → c` | Extract constant (Java/jdtls) |
+| `Space → c → x → m` | Extract method (Java, visual mode) |
+| `Space → c → g → s` | Go to super (Java) |
 
 ## Debugging
 
@@ -270,31 +275,31 @@ Note the capitalisation: `dO` steps **over**, `do` steps **out**.
 
 | | |
 |---|---|
-| `Space d b` | Toggle breakpoint |
-| `Space d B` | Conditional breakpoint |
-| `Space d c` | Run / continue |
-| `Space d C` | Run to cursor |
-| `Space d O` | Step over |
-| `Space d i` | Step into |
-| `Space d o` | Step out |
-| `Space d t` | Terminate |
-| `Space d u` | Toggle debugger UI |
-| `Space d e` | Evaluate expression |
-| `Space d r` | Toggle REPL |
-| `Space d s` | Session info |
+| `Space → d → b` | Toggle breakpoint |
+| `Space → d → B` | Conditional breakpoint |
+| `Space → d → c` | Run / continue |
+| `Space → d → C` | Run to cursor |
+| `Space → d → O` | Step over |
+| `Space → d → i` | Step into |
+| `Space → d → o` | Step out |
+| `Space → d → t` | Terminate |
+| `Space → d → u` | Toggle debugger UI |
+| `Space → d → e` | Evaluate expression |
+| `Space → d → r` | Toggle REPL |
+| `Space → d → s` | Session info |
 
 ## Testing
 
 | | |
 |---|---|
-| `Space t r` | Run nearest test |
-| `Space t t` | Run file |
-| `Space t T` | Run all test files |
-| `Space t s` | Toggle summary panel |
-| `Space t o` | Show output |
-| `Space t d` | Debug nearest test |
-| `Space t w` | Toggle watch mode |
-| `Space t l` | Run last |
+| `Space → t → r` | Run nearest test |
+| `Space → t → t` | Run file |
+| `Space → t → T` | Run all test files |
+| `Space → t → s` | Toggle summary panel |
+| `Space → t → o` | Show output |
+| `Space → t → d` | Debug nearest test |
+| `Space → t → w` | Toggle watch mode |
+| `Space → t → l` | Run last |
 
 ## HTTP client (`.http` scratch files)
 
@@ -302,13 +307,13 @@ Open any `.http` file, then:
 
 | | |
 |---|---|
-| `Space R s` | Send request |
-| `Space R r` | Replay last |
-| `Space R b` | Open scratchpad |
-| `Space R e` | Set environment |
-| `Space R c` | Copy as cURL |
-| `Space R C` | Paste from cURL |
-| `Space R t` | Toggle headers / body |
+| `Space → R → s` | Send request |
+| `Space → R → r` | Replay last |
+| `Space → R → b` | Open scratchpad |
+| `Space → R → e` | Set environment |
+| `Space → R → c` | Copy as cURL |
+| `Space → R → C` | Paste from cURL |
+| `Space → R → t` | Toggle headers / body |
 
 ## Database (JDBC)
 
@@ -320,20 +325,20 @@ Drivers come from Maven Central on first use; no native client needed.
 | Open a table | **double click it** | the select top right, its rows under it |
 | How a table is built | `:IdeDbStructure` | columns, keys both ways, indexes — or right-click → Table |
 | One cell on its own | `v` or `Enter` | in the grid: JSON indented, long text wrapped, `y` copies it |
-| What the database will do | `Space D x` | the query plan — a scan where you expected an index |
+| What the database will do | `Space → D → x` | the query plan — a scan where you expected an index |
 | Right-click a table | **right click** | in the tree: rows, structure, count, copy its name |
-| ...and what it did do | `Space D X` | runs it as well; selects only |
+| ...and what it did do | `Space → D → X` | runs it as well; selects only |
 | Every row | `a` | up to the cap; `c` counts them |
 | Run what you edited | `Ctrl+Enter` | in either pane, and in insert mode too; rows refresh below |
-| ...on one connection | `k e b a b   d b   name` | straight into a SQL console |
-| Database tool window | `Space D D` | Explorer |
-| New data source | `Space D a` | Add a connection, then test it |
-| Open a table | `Space D t` | Browse tables, open one |
-| New console | `Space D q` | SQL console bound to a connection |
-| Attach console to source | `Space D c` | Attach to this buffer |
-| Execute | `Ctrl+Enter` or `Space D r` | Run the statement under the cursor |
-| | `Space D p` | Test the connection |
-| | `Space D e` | Edit the connections file |
+| ...on one connection | `kebab db name` | straight into a SQL console |
+| Database tool window | `Space → D → D` | Explorer |
+| New data source | `Space → D → a` | Add a connection, then test it |
+| Open a table | `Space → D → t` | Browse tables, open one |
+| New console | `Space → D → q` | SQL console bound to a connection |
+| Attach console to source | `Space → D → c` | Attach to this buffer |
+| Execute | `Ctrl+Enter` or `Space → D → r` | Run the statement under the cursor |
+| | `Space → D → p` | Test the connection |
+| | `Space → D → e` | Edit the connections file |
 | | `:IdeDbStatus` | Connections, and warm processes |
 | | `:IdeDbDisconnect` | Close the warm processes |
 
@@ -341,35 +346,35 @@ The first query on a connection costs about 180ms while the driver loads; every
 one after it about 0.2ms, because the process is kept open.
 
 Completion in a SQL buffer with a connection attached: tables, `customers.` →
-its columns with types, and aliases. `Space D q` attaches for you; in a plain
-`.sql` file use `Space D c` first, or completion has nothing to go on.
+its columns with types, and aliases. `Space → D → q` attaches for you; in a plain
+`.sql` file use `Space → D → c` first, or completion has nothing to go on.
 
-Note `Space d *` is the **debugger**, so the database namespace is the shifted
-`Space D *`.
+Note `Space → d → *` is the **debugger**, so the database namespace is the shifted
+`Space → D → *`.
 
 ## Older notes on the SQL story
 
-`Space D` — toggle DBUI. Add connections inside it; completion works in `.sql` buffers.
+`Space → D` — toggle DBUI. Add connections inside it; completion works in `.sql` buffers.
 
 ## Python
 
-`Space c v` — select virtualenv. Do this first in a Python project or basedpyright
+`Space → c → v` — select virtualenv. Do this first in a Python project or basedpyright
 will resolve against the system interpreter instead of your venv.
 
 ## Claude Code
 
 | | |
 |---|---|
-| `Space a c` | Toggle Claude |
-| `Space a f` | Focus Claude |
-| `Space a r` | Resume session |
-| `Space a b` | Add current buffer to context |
-| `Space a s` | Send selection (visual mode) |
-| `Space a a` / `Space a d` | Accept / deny diff |
+| `Space → a → c` | Toggle Claude |
+| `Space → a → f` | Focus Claude |
+| `Space → a → r` | Resume session |
+| `Space → a → b` | Add current buffer to context |
+| `Space → a → s` | Send selection (visual mode) |
+| `Space → a → a` / `Space → a → d` | Accept / deny diff |
 
 ## Following edits made outside the editor
 
-**On by default.** `Space u f` or `:IdeFollow` turns it off for the session.
+**On by default.** `Space → u → f` or `:IdeFollow` turns it off for the session.
 
 When something else changes a file in the project — an AI agent working in it,
 another editor, a formatter, a `git checkout` — the view moves to that file and
@@ -415,7 +420,7 @@ Opening a project starts the watcher, the badge appears by itself, and a file an
 agent edits **or creates** pulls the view across with the cursor on the first
 changed line. Nothing to configure.
 
-`Space u f` turns it off, and a stop you asked for sticks — it will not restart
+`Space → u → f` turns it off, and a stop you asked for sticks — it will not restart
 itself until you open another project. To have it off from the start:
 
 ```lua
@@ -480,16 +485,16 @@ the shell, and that is the whole trick.
 | `:.!bash` | run the current line as bash, replace it with the output |
 | `:'<,'>!jq .` | filter just the visual selection |
 | `:term htop` | open it in a real terminal buffer |
-| `Ctrl+/` or `Space f t` | floating terminal, at the project root |
-| `Space f T` | the same, in the current file's directory |
+| `Ctrl+/` or `Space → f → t` | floating terminal, at the project root |
+| `Space → f → T` | the same, in the current file's directory |
 
 `%` expands to the current file, so `:!python3 %` runs what you are looking at,
 and `:!kebab doctor` works because the command is on your PATH. Inside a
-terminal buffer, `Ctrl+\ Ctrl+n` returns you to normal mode so you can scroll and
+terminal buffer, `Ctrl+\ → Ctrl+n` returns you to normal mode so you can scroll and
 copy; `i` goes back to typing.
 
 For anything you run more than once, put it in `.kebab/run.json` instead
-(`Space o r`) so it becomes a task with a name, output pane and exit code,
+(`Space → o → r`) so it becomes a task with a name, output pane and exit code,
 rather than a line you retype.
 
 ## Asking the editor questions from a shell
@@ -498,11 +503,11 @@ Read-only, and meant for a script or an AI agent as much as for you.
 
 | | |
 |---|---|
-| `k e b a b   d i a g n o s t i c s   file` | errors and warnings from the language server |
-| `k e b a b   d e f i n i t i o n   file : line : col` | where that symbol is defined |
-| `k e b a b   r e f e r e n c e s   file : line : col` | everywhere it is used |
-| `k e b a b   s y m b o l s   file` | the outline of a file |
-| `k e b a b   h o v e r   file : line : col` | its type and docs |
+| `kebab diagnostics file` | errors and warnings from the language server |
+| `kebab definition file:line:col` | where that symbol is defined |
+| `kebab references file:line:col` | everywhere it is used |
+| `kebab symbols file` | the outline of a file |
+| `kebab hover file:line:col` | its type and docs |
 
 `--json` for a machine-readable answer. By default the exit code says whether
 the *query* worked, not what it found — finding errors is a successful query.
@@ -533,7 +538,7 @@ layer.
 
 ## Checking the install
 
-`kebab doctor` from a shell, or `Space p D` / `:IdeDoctor` in the editor.
+`kebab doctor` from a shell, or `Space → p → D` / `:IdeDoctor` in the editor.
 
 Grouped by who owns the version:
 
