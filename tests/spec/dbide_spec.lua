@@ -78,16 +78,16 @@ H.describe("reading the explorer tree", function()
     local lines = {
       '" Press ? for help',
       "",
-      "▸ 󰆼 MII",
+      "▸ 󰆼 alpha",
       "▾ 󰆼 shop ✓",
       "    󰓰 New query",
       "  ▾ 󰓱 Tables (2)",
       "    ▸  customers",
       "▸ 󰆼 other",
     }
-    local names = { "MII", "shop", "other" }
+    local names = { "alpha", "shop", "other" }
     H.eq("shop", I.connection_above(lines, 7, names), "the nearest connection above the table")
-    H.eq("MII", I.connection_above(lines, 3, names))
+    H.eq("alpha", I.connection_above(lines, 3, names))
     H.eq("other", I.connection_above(lines, 8, names))
     H.eq(nil, I.connection_above(lines, 1, names), "nothing above the first connection")
   end)
@@ -212,6 +212,175 @@ H.describe("opening a table", function()
     end
     local rows = table.concat(vim.api.nvim_buf_get_lines(out, 0, -1, false), "\n")
     H.matches("no_such_table", rows, "and shown where the rows would be")
+  end)
+end)
+
+H.describe("paging the rows", function()
+  -- Every SQL editor pages its result grid. This one did not: a select ran
+  -- whole and `limit 200` was baked into the preview, so "show me this table"
+  -- meant "show me some of this table, once".
+  local many_url
+  local function many()
+    if many_url then
+      return { name = "many", url = many_url }
+    end
+    local file = H.tmpdir("dbide-pages") .. "/many.sqlite"
+    local rows = {}
+    for i = 1, 250 do
+      rows[#rows + 1] = ("insert into nums (label) values ('row %d');"):format(i)
+    end
+    local sql = "create table nums (id integer primary key, label text);\n" .. table.concat(rows, "\n")
+    H.eq(0, vim.system({ "sqlite3", file }, { stdin = sql, text = true }):wait(60000).code)
+    many_url = "jdbc:sqlite:" .. file
+    return { name = "many", url = many_url }
+  end
+
+  local function rows_pane()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then
+        return b
+      end
+    end
+  end
+
+  local function header()
+    return vim.api.nvim_buf_get_lines(rows_pane(), 0, 1, false)[1]
+  end
+
+  H.it("reads the runner's footer and keeps it off the screen", function()
+    local lines = {
+      "id | label",
+      "---+------",
+      "1  | row 1",
+      "",
+      "(rows 1-100 of more)",
+      "-- kebab-page offset=0 shown=100 more=1",
+    }
+    local rows, info = I.split_footer(lines)
+    H.eq(5, #rows, "the footer line should not be shown")
+    H.eq({ offset = 0, shown = 100, more = true }, info)
+    local _, none = I.split_footer({ "(1 row)" })
+    H.eq(nil, none, "output with no footer is not a page")
+  end)
+
+  H.it("says where you are", function()
+    local c = { name = "shop", url = "jdbc:sqlite:/tmp/x.db" }
+    H.matches("rows 1%-100 of more", I.pager_line(c, { offset = 0, shown = 100, more = true }))
+    H.matches("page 1", I.pager_line(c, { offset = 0, shown = 100, more = true }))
+    H.matches("rows 101%-150 of 150", I.pager_line(c, { offset = 100, shown = 50, more = false }))
+    H.matches("page 2", I.pager_line(c, { offset = 100, shown = 50, more = false }))
+    H.matches("%]p next", I.pager_line(c, { offset = 0, shown = 1, more = false }),
+      "the keys belong on screen; nobody reads a cheatsheet for a pager")
+  end)
+
+  H.it("shows one page, not the whole table", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local lines = vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false)
+    -- header, blank, column names, rule, 100 rows, blank, count
+    H.ok(#lines < 120, ("one page should be about 100 rows, got %d lines"):format(#lines))
+    H.matches("rows 1%-100 of more", lines[1])
+    local text = table.concat(lines, "\n")
+    H.matches("row 100", text)
+    H.ok(not text:match("row 101"), "the next page should not be on screen")
+  end)
+
+  H.it("leaves the statement unlimited, because the pager owns the limit", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local statement = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    H.ok(not statement:lower():match("limit"),
+      "the select shown should be the one you would have written: " .. statement)
+  end)
+
+  H.it("walks forward and back", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    I.turn_page(1)
+    H.matches("rows 101%-200 of more", header())
+    H.matches("row 101", table.concat(vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false), "\n"))
+    I.turn_page(1)
+    H.matches("rows 201%-250 of 250", header(), "the last page knows it is the last")
+    I.turn_page(-1)
+    H.matches("rows 101%-200", header())
+    I.first_page()
+    H.matches("rows 1%-100", header())
+  end)
+
+  H.it("will not walk off either end, and says so", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local notes = H.capture_notify(function() I.turn_page(-1) end)
+    H.eq(1, #notes)
+    H.matches("first page", notes[1].msg)
+    H.matches("rows 1%-100", header(), "and the page did not move")
+
+    I.turn_page(1)
+    I.turn_page(1)
+    notes = H.capture_notify(function() I.turn_page(1) end)
+    H.eq(1, #notes)
+    H.matches("last page", notes[1].msg)
+    H.matches("rows 201%-250", header())
+  end)
+
+  H.it("pages whatever was last run, not whatever the editor now says", function()
+    -- The statement is kept with the pager: you can edit the query in the pane
+    -- without the pager silently flipping to a page of a different result.
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "select 'edited' as x" })
+    I.turn_page(1)
+    H.matches("rows 101%-200", header(), "editing the pane must not change what is paged")
+  end)
+
+  H.it("binds the pager on both panes", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    for _, buf in ipairs({ vim.api.nvim_get_current_buf(), rows_pane() }) do
+      local keys = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+        keys[m.lhs] = true
+      end
+      for _, lhs in ipairs({ "]p", "[p", "[P", "R" }) do
+        H.ok(keys[lhs], ("%s should be mapped in buffer %d"):format(lhs, buf))
+      end
+    end
+  end)
+
+  H.it("respects vim.g.kebab_db_page_size", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local saved = vim.g.kebab_db_page_size
+    vim.g.kebab_db_page_size = 10
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local got = header()
+    vim.g.kebab_db_page_size = saved
+    H.matches("rows 1%-10 of more", got)
+  end)
+
+  H.it("runs a script whole rather than refusing to page it", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    I.layout(c)
+    I.run(c, "select 1 as a; select 2 as b;")
+    local text = table.concat(vim.api.nvim_buf_get_lines(rows_pane(), 0, -1, false), "\n")
+    H.matches("not paged", text, "got: " .. text:sub(1, 160))
+    H.matches("1", text)
   end)
 end)
 

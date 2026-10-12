@@ -138,9 +138,14 @@ function M.output(c)
   end
   pcall(vim.api.nvim_buf_set_name, buf, name)
   vim.b[buf][OUTPUT_VAR] = true
+  -- The rows pane carries the connection too, so the pager keys work from
+  -- either pane: pressing ]p where the rows are is the obvious thing to do.
+  vim.b[buf].db = jdbc.dadbod_url(c.url)
+  vim.b[buf].kebab_db_name = c.name
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "dbout"
+  M.bind_pager(buf)
   local out = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(out, buf)
   local total = vim.api.nvim_win_get_height(editor) + vim.api.nvim_win_get_height(out)
@@ -166,13 +171,168 @@ end
 
 -- ----------------------------------------------------------------- the flow
 
+-- One pager per connection. A page flip has to re-run the statement -- the
+-- cursor is not held open between requests -- so the statement is kept here
+-- rather than re-read from the editor buffer, which the user may have edited
+-- in the meantime. Pressing next must page the query whose rows are on screen.
+local PAGES = {}
+
+---Rows per page.
+function M.page_size()
+  local n = tonumber(vim.g.kebab_db_page_size)
+  if n and n >= 1 then
+    return math.floor(n)
+  end
+  return 100
+end
+
+---The pager state for a connection, if a statement has been run.
+---@param url string
+function M.pager(url)
+  return PAGES[url]
+end
+
+---Pull the footer the runner appends, and the lines without it.
+---@param lines string[]
+---@return string[] rows, table|nil info { offset, shown, more }
+function M.split_footer(lines)
+  local rows, info = {}, nil
+  for _, line in ipairs(lines or {}) do
+    local offset, shown, more = line:match("^%-%- kebab%-page offset=(%d+) shown=(%d+) more=([01])$")
+    if offset then
+      info = { offset = tonumber(offset), shown = tonumber(shown), more = more == "1" }
+    else
+      rows[#rows + 1] = line
+    end
+  end
+  return rows, info
+end
+
+---The pager line shown above the rows.
+---@param c kebab.DbConnection
+---@param info table|nil
+---@return string
+function M.pager_line(c, info)
+  if not info then
+    return ("-- %s"):format(c.name)
+  end
+  local size = M.page_size()
+  local page = math.floor(info.offset / size) + 1
+  local first = info.shown > 0 and info.offset + 1 or info.offset
+  local last = info.offset + info.shown
+  local total = info.more and "more" or tostring(last)
+  return ("-- %s · rows %d-%d of %s · page %d · ]p next  [p prev  [P first  R refresh")
+    :format(c.name, first, last, total, page)
+end
+
+---Run `sql` and show its first page.
+---@param c kebab.DbConnection
+---@param sql string
+function M.run(c, sql)
+  PAGES[c.url] = { sql = sql, offset = 0 }
+  return M.fetch(c)
+end
+
+---Fetch the current page of the current statement.
+---@param c kebab.DbConnection
+function M.fetch(c)
+  local pager = PAGES[c.url]
+  if not pager then
+    return false, "nothing has been run on this connection yet"
+  end
+  db.ensure_credentials(c.url)
+  local arg = ("%d:%d"):format(pager.offset, M.page_size())
+  local lines, err = jdbc.run(c.url, "page", { args = { arg }, stdin = pager.sql, timeout = 300000 })
+  if not lines then
+    -- A script cannot be paged -- which statement's rows would it be? -- so
+    -- run it whole rather than refusing. Same for anything else the pager
+    -- cannot do: the rows matter more than the pager.
+    if tostring(err):find("paging needs a single statement", 1, true) then
+      local whole, werr = db.query(c, pager.sql)
+      if not whole then
+        return M.failed(c, werr)
+      end
+      PAGES[c.url] = nil
+      M.show_rows(c, vim.list_extend({ ("-- %s · not paged (several statements)"):format(c.name), "" }, whole))
+      return true
+    end
+    return M.failed(c, err)
+  end
+  local rows, info = M.split_footer(lines)
+  pager.info = info
+  local header = { M.pager_line(c, info), "" }
+  M.show_rows(c, vim.list_extend(header, rows))
+  return true
+end
+
+---Report a failed statement where the rows would have been.
+function M.failed(c, err)
+  M.show_rows(c, vim.split(("-- %s · failed\n-- %s"):format(c.name, tostring(err)), "\n"))
+  vim.notify(tostring(err), vim.log.levels.ERROR)
+  return false, err
+end
+
+---Move by `delta` pages. Refuses to walk off either end, and says so rather
+---than silently redrawing the same page.
+---@param delta number
+function M.turn_page(delta)
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  if not c then
+    return vim.notify("No connection here", vim.log.levels.WARN)
+  end
+  local pager = PAGES[c.url]
+  if not pager then
+    return vim.notify("Nothing has been run yet", vim.log.levels.WARN)
+  end
+  local size = M.page_size()
+  if delta > 0 and pager.info and not pager.info.more then
+    return vim.notify("Already on the last page", vim.log.levels.INFO)
+  end
+  local target = pager.offset + delta * size
+  if target < 0 then
+    if pager.offset == 0 then
+      return vim.notify("Already on the first page", vim.log.levels.INFO)
+    end
+    target = 0
+  end
+  pager.offset = target
+  M.fetch(c)
+end
+
+---Back to the first page.
+function M.first_page()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  local pager = c and PAGES[c.url]
+  if not pager then
+    return vim.notify("Nothing has been run yet", vim.log.levels.WARN)
+  end
+  pager.offset = 0
+  M.fetch(c)
+end
+
+---Re-run the current statement, same page.
+function M.refresh()
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  local pager = c and PAGES[c.url]
+  if not pager then
+    return vim.notify("Nothing has been run yet", vim.log.levels.WARN)
+  end
+  M.fetch(c)
+end
+
 ---Open a table the way double clicking one in a database IDE does: its select
----in the statement pane, its rows underneath, cursor left in the statement so
----the next thing you type edits the query.
+---in the statement pane, its first page of rows underneath, cursor left in the
+---statement so the next thing you type edits the query.
+---
+---The select carries no LIMIT: the page size is the grid's business, and a
+---statement the user is shown should be the one they would have written.
 ---@param c kebab.DbConnection
 ---@param table_name string
 function M.open_table(c, table_name)
-  local sql = db.preview_sql(c.url, table_name, db.preview_limit())
+  local sql = db.preview_sql(c.url, table_name)
   local layout = M.layout(c)
   if not layout.editor then
     return false, "could not open the statement pane"
@@ -187,25 +347,12 @@ function M.open_table(c, table_name)
       vim.cmd("silent write")
     end)
   end)
-  return M.run(c, sql)
-end
-
----Run `sql` and put the result in the rows pane.
----@param c kebab.DbConnection
----@param sql string
-function M.run(c, sql)
-  local lines, err = db.query(c, sql)
-  if not lines then
-    M.show_rows(c, vim.split("-- " .. tostring(err), "\n"))
-    vim.notify(tostring(err), vim.log.levels.ERROR)
-    return false, err
-  end
-  M.show_rows(c, lines)
-  local editor = window_with(EDITOR_VAR)
+  local ok, err = M.run(c, sql)
+  local editor = M.layout(c).editor
   if editor and vim.api.nvim_win_is_valid(editor) then
     vim.api.nvim_set_current_win(editor)
   end
-  return true
+  return ok, err
 end
 
 ---The whole layout, created as needed.
@@ -243,9 +390,28 @@ function M.run_current()
   return M.run(saved or c, statement)
 end
 
+---Paging keys, on both panes.
+---
+---`]p`/`[p` rather than something with <leader>: the whole of <leader>d* is
+---the debugger's and <leader>D* is already the database menu, and a pager is
+---pressed far too often to live three keys deep.
+---@param buf integer
+function M.bind_pager(buf)
+  local keys = {
+    ["]p"] = { function() M.turn_page(1) end, "Next page" },
+    ["[p"] = { function() M.turn_page(-1) end, "Previous page" },
+    ["[P"] = { function() M.first_page() end, "First page" },
+    ["R"] = { function() M.refresh() end, "Re-run this page" },
+  }
+  for lhs, spec in pairs(keys) do
+    vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })
+  end
+end
+
 ---Buffer-local keys for the statement pane.
 ---@param buf integer
 function M.bind_editor(buf)
+  M.bind_pager(buf)
   -- Buffer-local, so it wins over the global <leader>S (dadbod's own exec,
   -- which opens a result window of its own and would leave two).
   vim.keymap.set("n", "<leader>S", function()

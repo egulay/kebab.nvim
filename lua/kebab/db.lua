@@ -414,8 +414,17 @@ end
 ---@param url string a JDBC URL
 ---@param table_name string
 ---@param limit number
+---@param url string
+---@param table_name string
+---@param limit? number nil for no limit clause at all, which is what the
+---                     paged result grid wants: the statement shown to the
+---                     user is the one they would have written, and the page
+---                     size is the grid's business.
 function M.preview_sql(url, table_name, limit)
   local d = DIALECTS[jdbc.subprotocol(url) or ""] or {}
+  if limit == nil then
+    return ("select * from %s"):format(quote_identifier(table_name, d.quote or '"'))
+  end
   local head = d.head and d.head:format(limit) or ""
   -- a dialect caps rows either in the select list or in a trailing clause,
   -- never both: `top (n) ... limit n` is a syntax error on SQL Server

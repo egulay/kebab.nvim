@@ -83,6 +83,7 @@ public final class KebabJdbc {
         case "columns" -> columns(conn, args.length > 2 ? args[2] : null);
         case "schema" -> schema(conn);
         case "query" -> query(conn, readStdin());
+        case "page" -> page(conn, args.length > 2 ? args[2] : null, readStdin());
         case "serve" -> serve(conn);
         default -> {
           System.err.println("unknown mode: " + mode);
@@ -176,6 +177,7 @@ public final class KebabJdbc {
         case "columns" -> columns(conn, arg);
         case "schema" -> schema(conn);
         case "query" -> query(conn, payload);
+        case "page" -> page(conn, arg, payload);
         default -> throw new IllegalArgumentException("unknown mode: " + mode);
       }
     } finally {
@@ -477,6 +479,105 @@ public final class KebabJdbc {
     }
   }
 
+  /**
+   * One page of a single statement's rows.
+   *
+   * <p>Paging belongs here rather than in the SQL because every dialect spells
+   * it differently and some statements cannot be wrapped or extended at all: a
+   * select that already carries its own LIMIT, a CTE, {@code select ... for
+   * update}. Skipping rows on the cursor works for any statement and needs no
+   * dialect table.
+   *
+   * <p>The cost is that page n reads n*size rows from the cursor. For
+   * interactive paging that is the right trade: the driver is streaming, the
+   * warm process keeps the connection, and a page flip is a round trip either
+   * way. It is not the right trade for walking a ten million row table to the
+   * end, which is what a WHERE clause is for.
+   *
+   * @param arg "<offset>:<size>"
+   */
+  private static void page(Connection conn, String arg, String sql) throws SQLException {
+    long offset = 0;
+    int size = 100;
+    if (arg != null && !arg.isBlank()) {
+      String[] parts = arg.split(":", 2);
+      try {
+        offset = Long.parseLong(parts[0].trim());
+        if (parts.length > 1) size = Integer.parseInt(parts[1].trim());
+      } catch (NumberFormatException e) {
+        throw new UsageException("page takes <offset>:<size>, got: " + arg);
+      }
+    }
+    if (offset < 0 || size < 1) {
+      throw new UsageException("page needs offset >= 0 and size >= 1, got: " + arg);
+    }
+    if (sql.isBlank()) {
+      throw new UsageException("nothing to run");
+    }
+    List<String> statements = splitStatements(sql);
+    if (statements.isEmpty()) {
+      throw new UsageException("nothing to run");
+    }
+    if (statements.size() > 1) {
+      // Paging a script has no meaning: which statement's rows would it be?
+      throw new UsageException("paging needs a single statement, got " + statements.size());
+    }
+
+    // PostgreSQL's driver only streams -- i.e. honours the fetch size -- inside
+    // a transaction; outside one it materialises the whole result set, so
+    // `select * from a_big_table` would be read into memory in full before the
+    // first page could be shown. Every driver here is happy to have autocommit
+    // turned off for a read, and it is restored below.
+    boolean autocommit = conn.getAutoCommit();
+    boolean streamed = false;
+    try {
+      if (autocommit) {
+        try {
+          conn.setAutoCommit(false);
+          streamed = true;
+        } catch (SQLException e) {
+          // a driver that refuses is no worse off than before
+          streamed = false;
+        }
+      }
+      try (Statement st = conn.createStatement()) {
+        try {
+          st.setFetchSize(Math.min(size + 1, 1000));
+        } catch (SQLException e) {
+          // advisory on every driver that has it; ignorable where it does not
+        }
+        boolean hasResult = st.execute(statements.get(0));
+        if (!hasResult) {
+          int updated = st.getUpdateCount();
+          if (updated >= 0) {
+            System.out.println("(" + updated + " row" + (updated == 1 ? "" : "s") + " affected)");
+          } else {
+            System.out.println("(no results)");
+          }
+          return;
+        }
+        try (ResultSet rs = st.getResultSet()) {
+          printPage(rs, offset, size);
+        }
+      }
+    } finally {
+      if (streamed) {
+        // A read needs no commit, and rolling back releases the cursor without
+        // leaving the connection in a transaction for the next request.
+        try {
+          conn.rollback();
+        } catch (SQLException e) {
+          // nothing useful to do; the restore below is what matters
+        }
+        try {
+          conn.setAutoCommit(autocommit);
+        } catch (SQLException e) {
+          // ditto
+        }
+      }
+    }
+  }
+
   private static void runOne(Connection conn, String sql) throws SQLException {
     try (Statement st = conn.createStatement()) {
       boolean hasResult = st.execute(sql);
@@ -559,15 +660,69 @@ public final class KebabJdbc {
     for (int i = 1; i <= cols; i++) headers.add(md.getColumnLabel(i));
 
     List<List<String>> rows = new ArrayList<>();
-    while (rs.next()) {
-      List<String> row = new ArrayList<>(cols);
-      for (int i = 1; i <= cols; i++) {
-        Object value = rs.getObject(i);
-        row.add(render(value));
-      }
-      rows.add(row);
-    }
+    while (rs.next()) rows.add(readRow(rs, cols));
 
+    StringBuilder sb = renderGrid(headers, rows);
+    sb.append('\n').append('\n').append("(").append(rows.size())
+        .append(rows.size() == 1 ? " row)" : " rows)");
+    System.out.println(sb);
+  }
+
+  /**
+   * One page of rows, with a footer the caller can parse.
+   *
+   * <p>The footer is how the editor knows whether there is a next page without
+   * counting the whole result set: the cursor is asked for one row beyond the
+   * page and that answer is reported. A count(*) would be a second query and
+   * would disagree with the first under any concurrent write.
+   */
+  private static void printPage(ResultSet rs, long offset, int size) throws SQLException {
+    ResultSetMetaData md = rs.getMetaData();
+    int cols = md.getColumnCount();
+    List<String> headers = new ArrayList<>();
+    for (int i = 1; i <= cols; i++) headers.add(md.getColumnLabel(i));
+
+    long skipped = 0;
+    while (skipped < offset && rs.next()) skipped++;
+    // Asking for a page past the end is not an error: it is what pressing
+    // "next" on the last page does, and the footer says so.
+    List<List<String>> rows = new ArrayList<>();
+    while (rows.size() < size && rs.next()) rows.add(readRow(rs, cols));
+    boolean more = rs.next();
+
+    StringBuilder sb = renderGrid(headers, rows);
+    sb.append('\n').append('\n');
+    if (rows.isEmpty()) {
+      sb.append(skipped < offset ? "(no rows at this offset)" : "(no rows)");
+    } else {
+      sb.append("(rows ")
+          .append(offset + 1)
+          .append("-")
+          .append(offset + rows.size())
+          .append(more ? " of more" : " of " + (offset + rows.size()))
+          .append(")");
+    }
+    // Machine-readable, and last: kebab.dbide strips this line and renders the
+    // pager from it.
+    sb.append('\n')
+        .append("-- kebab-page offset=")
+        .append(offset)
+        .append(" shown=")
+        .append(rows.size())
+        .append(" more=")
+        .append(more ? 1 : 0);
+    System.out.println(sb);
+  }
+
+  private static List<String> readRow(ResultSet rs, int cols) throws SQLException {
+    List<String> row = new ArrayList<>(cols);
+    for (int i = 1; i <= cols; i++) row.add(render(rs.getObject(i)));
+    return row;
+  }
+
+  /** The aligned grid, without any footer. */
+  private static StringBuilder renderGrid(List<String> headers, List<List<String>> rows) {
+    int cols = headers.size();
     int[] width = new int[cols];
     for (int i = 0; i < cols; i++) width[i] = displayWidth(headers.get(i));
     for (List<String> row : rows) {
@@ -591,9 +746,7 @@ public final class KebabJdbc {
         sb.append(pad(row.get(i), width[i]));
       }
     }
-    sb.append('\n').append('\n').append("(").append(rows.size())
-        .append(rows.size() == 1 ? " row)" : " rows)");
-    System.out.println(sb);
+    return sb;
   }
 
   private static String pad(String s, int w) {
