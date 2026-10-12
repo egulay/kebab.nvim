@@ -26,6 +26,30 @@ function M.write_lines(path, lines, flags)
   return true
 end
 
+---Create `path` and its parents, reporting instead of raising.
+---
+---`vim.fn.mkdir` raises E739 ("Cannot create directory") rather than returning
+---a code, same as writefile raises E482.
+---@param path string
+---@return boolean ok, string|nil err
+function M.mkdir(path)
+  if vim.fn.isdirectory(path) == 1 then
+    return true
+  end
+  local existing = vim.uv.fs_stat(path)
+  if existing then
+    return false, ("%s exists and is not a directory"):format(path)
+  end
+  local ok, err = pcall(vim.fn.mkdir, path, "p")
+  if not ok then
+    return false, ("could not create %s: %s"):format(path, tostring(err):gsub("^Vim[^:]*:", ""))
+  end
+  if vim.fn.isdirectory(path) == 0 then
+    return false, ("could not create %s"):format(path)
+  end
+  return true
+end
+
 ---Read `path` as a list of lines.
 ---@param path string
 ---@param flags? string

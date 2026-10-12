@@ -242,8 +242,10 @@ H.describe("tree mappings", function()
       -- on screen ("g y" rather than "gy"), which cannot be matched against a
       -- mapping. kebab.keys.humanise keeps both for exactly this reason.
       local rtxt = leaf.entry.keyspec or leaf.entry.rtxt
-      -- <leader>… entries are global keymaps, covered by keymaps_spec
-      if rtxt and rtxt ~= "" and not rtxt:match("^<leader>") then
+      -- <leader>… entries are global keymaps, covered by keymaps_spec, and a
+      -- `:command` hint is checked by menu_shortcuts_spec -- neither is a
+      -- mapping in the tree buffer, which is what this test reads.
+      if rtxt and rtxt ~= "" and not rtxt:match("^<leader>") and rtxt:sub(1, 1) ~= ":" then
         checked = checked + 1
         if not bound[rtxt] then
           missing[#missing + 1] = ("%s advertises %q"):format(leaf.label, rtxt)

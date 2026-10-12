@@ -107,6 +107,26 @@ function M.collect()
     out.rows = { row = row, col = col }
   end
 
+  -- The tab bar is not a window, so its position cannot be read from one.
+  -- nvim_eval_statusline renders it and says how wide it is, which is enough
+  -- to find the column a given buffer's tab occupies.
+  if vim.o.showtabline > 0 and vim.o.tabline ~= "" then
+    local ok, rendered = pcall(vim.api.nvim_eval_statusline, vim.o.tabline, { use_tabline = true })
+    if ok and rendered and rendered.str then
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.bo[buf].buflisted then
+          local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+          if name ~= "" then
+            local at = rendered.str:find(name, 1, true)
+            if at then
+              out["tab_" .. name] = { row = 1, col = at }
+            end
+          end
+        end
+      end
+    end
+  end
+
   -- The right-click menu is a floating window that draws its labels as
   -- virtual text, so the rows are found through the extmarks rather than the
   -- buffer lines, which are blank.

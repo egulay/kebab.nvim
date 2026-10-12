@@ -312,6 +312,13 @@ H.describe("the watcher", function()
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "edited by me" })
     vim.cmd("silent write")
 
+    -- The autocmd that notes our writes lives in F.setup()'s augroup, and
+    -- another spec creating that group with clear = true would take it away --
+    -- which is why this passed alone and failed in the suite. Assert the note
+    -- was taken, so a failure says *that* rather than "it fired".
+    H.ok(F.state().own_writes > 0,
+      "the editor should have noted its own write; is the BufWritePost autocmd still registered?")
+
     -- give the watcher longer than it needs, so a pass is not just a race won
     local fired = vim.wait(3000, function()
       return F.state().pending > 0 or F.state().count > 0

@@ -653,6 +653,17 @@ function M.running()
   return STATE.running
 end
 
+---How many of our own writes are currently remembered. Diagnostic: a spec
+---asserting "our save was ignored" cannot tell "it was recognised as ours"
+---from "the autocmd never ran", and those have different fixes.
+function M.own_write_count()
+  local n = 0
+  for _ in pairs(OWN) do
+    n = n + 1
+  end
+  return n
+end
+
 function M.state()
   return {
     running = STATE.running,
@@ -662,6 +673,7 @@ function M.state()
     count = STATE.count,
     pending = vim.tbl_count(STATE.pending),
     held_reason = STATE.held_reason,
+    own_writes = M.own_write_count(),
   }
 end
 

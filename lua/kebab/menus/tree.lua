@@ -108,6 +108,60 @@ local function current_node()
   return node
 end
 
+---The directory the click landed on: the node itself if it is one, otherwise
+---the directory holding it. Right-clicking a file and asking for a new class
+---means "beside this one".
+---@return string|nil
+local function clicked_dir()
+  local node = current_node()
+  if not node or type(node.path) ~= "string" then
+    return nil
+  end
+  if node.type == "directory" then
+    return node.path
+  end
+  return vim.fn.fnamemodify(node.path, ":h")
+end
+
+local new_from_template = A.custom("new file from a template", function()
+  local dir = clicked_dir()
+  if not dir then
+    return vim.notify("neo-tree: nothing selected", vim.log.levels.WARN)
+  end
+  require("kebab.templates").pick({ dir = dir })
+end, function()
+  -- the templates have to exist, and the package line has to come from the
+  -- directory -- that is the whole point of going through them rather than
+  -- through neo-tree's plain "New File"
+  local T = require("kebab.templates")
+  if #T.available({}) == 0 then
+    return false, "no templates are registered"
+  end
+  if T.package_for("/x/src/main/java/com/example") ~= "com.example" then
+    return false, "the package line does not come from the directory"
+  end
+  return true
+end)
+
+local new_package = A.custom("new package", function()
+  local dir = clicked_dir()
+  if not dir then
+    return vim.notify("neo-tree: nothing selected", vim.log.levels.WARN)
+  end
+  require("kebab.templates").new_package(dir)
+end, function()
+  local T = require("kebab.templates")
+  local parts, err = T.package_parts("com.example.web")
+  if err or #parts ~= 3 or parts[3] ~= "web" then
+    return false, "a dotted name does not become nested directories"
+  end
+  local _, refused = T.package_parts("a/b")
+  if not refused then
+    return false, "a path separator should be refused"
+  end
+  return true
+end)
+
 local function copy_path(how)
   local fn = function()
     local node = current_node()
@@ -222,6 +276,14 @@ local menu = {
 
   { name = "New File", cmd = call("add"), rtxt = "a" },
   { name = "New Folder", cmd = call("add_directory"), rtxt = "A" },
+  -- What a graphical IDE offers on a package: a class with its package line
+  -- already filled in from where you clicked, and a package made from a
+  -- dotted name rather than three nested folders. Reported as missing --
+  -- "right click on any package. i can not see any new file or new package".
+  -- Declared canonically: kebab.keys.humanise rewrites it to "Space f n" for
+  -- the screen and keeps this form for the sweep to check.
+  { name = "New Class / From Template...", cmd = new_from_template, rtxt = "<leader>fn" },
+  { name = "New Package...", cmd = new_package, rtxt = ":IdeNewPackage" },
   { name = "Rename", cmd = call("rename"), rtxt = "r" },
   { name = "Delete", cmd = call("delete"), rtxt = "d" },
   { name = "separator" },

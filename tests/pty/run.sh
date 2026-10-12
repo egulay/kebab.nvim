@@ -256,7 +256,7 @@ cat > "$work/case.json" <<JSON
   "actions": [ {"kind":"wait","seconds":17},
                {"kind":"click_target","name":"tables","file":"$work/targets","count":2},
                {"kind":"wait","seconds":4},
-               {"kind":"click","col":12,"row":1,"button":0,"count":1},
+               {"kind":"click_target","name":"tab_a.go","file":"$work/targets"},
                {"kind":"wait","seconds":7} ],
   "report": "$work/report.txt", "idle": 2, "limit": 110 }
 JSON

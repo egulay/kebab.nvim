@@ -35,7 +35,33 @@ local function open_project_tree(opts)
       or vim.uv.cwd()
     -- `show` opens the pane but leaves the cursor in the editor.
     pcall(cmd.execute, { action = "show", dir = root })
+    M.replace_netrw()
   end)
+end
+
+---Clear netrw out of the main window.
+---
+---`nvim <dir>` opens the directory in netrw, and neo-tree's sidebar opens
+---beside it -- so a project opened from the shell showed *two* file browsers,
+---the tree on the left and netrw filling the rest. Nothing in the layer did
+---that on purpose; it is simply what Vim does with a directory argument.
+---
+---netrw itself is left enabled: `:Explore` and `gx` still work. Only the
+---buffer occupying the window is replaced, and only when it is netrw's.
+---@return boolean replaced
+function M.replace_netrw()
+  local replaced = false
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].filetype == "netrw" then
+      vim.api.nvim_win_call(win, function()
+        pcall(vim.cmd, "enew")
+      end)
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      replaced = true
+    end
+  end
+  return replaced
 end
 
 ---The directory Neovim was started on, if it was started on one.

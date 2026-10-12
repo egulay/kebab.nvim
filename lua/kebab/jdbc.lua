@@ -620,7 +620,7 @@ end
 ---"Turkey"`. A machine set to one of those aliases -- systemd will happily
 ---take `timedatectl set-timezone Turkey` -- therefore cannot reach its own
 ---Postgres through any JDBC client, with an error that names neither the
----client nor the real cause. `vim.g.kebab_jdbc_timezone = "Europe/Istanbul"`
+---client nor the real cause. `vim.g.kebab_jdbc_timezone = "Europe/Berlin"`
 ---passes a canonical name instead.
 ---
 ---Not defaulted: guessing a canonical zone needs the alias table, and getting

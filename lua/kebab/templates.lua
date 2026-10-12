@@ -304,10 +304,87 @@ function M.pick(opts)
   end)
 end
 
+---A dotted package name turned into nested directories.
+---
+---Right-clicking a package in a graphical IDE offers "New → Package", and it
+---takes `com.example.web`, not three separate folders. Pure, so the splitting
+---is tested directly.
+---@param name string
+---@return string[] parts, string|nil err
+function M.package_parts(name)
+  name = vim.trim(name or "")
+  if name == "" then
+    return {}, "a package name is required"
+  end
+  if name:match("^%.") or name:match("%.$") or name:match("%.%.") then
+    return {}, ("%q is not a package name"):format(name)
+  end
+  local parts = {}
+  for part in name:gmatch("[^%.]+") do
+    -- A path separator here would escape the directory the user clicked, and
+    -- `..` would climb out of it.
+    if part:find("/") or part == ".." then
+      return {}, ("%q is not a package name"):format(name)
+    end
+    parts[#parts + 1] = part
+  end
+  if #parts == 0 then
+    return {}, ("%q is not a package name"):format(name)
+  end
+  return parts, nil
+end
+
+---Create a package under `dir`.
+---@param dir string
+---@param name string dotted, e.g. com.example.web
+---@return string|nil path, string|nil err
+function M.create_package(dir, name)
+  local parts, err = M.package_parts(name)
+  if err then
+    return nil, err
+  end
+  local path = (dir:gsub("/+$", "")) .. "/" .. table.concat(parts, "/")
+  local made, merr = require("kebab.fs").mkdir(path)
+  if not made then
+    return nil, merr
+  end
+  return path, nil
+end
+
+---Ask for a package name and create it.
+---@param dir string the directory that was right-clicked
+function M.new_package(dir)
+  local existing = M.package_for(dir)
+  local prompt = existing ~= "" and ("New package under %s: "):format(existing) or "New package: "
+  vim.ui.input({ prompt = prompt }, function(name)
+    if name == nil or vim.trim(name) == "" then
+      return
+    end
+    local path, err = M.create_package(dir, name)
+    if not path then
+      return vim.notify(err, vim.log.levels.ERROR)
+    end
+    vim.notify("Created " .. vim.fn.fnamemodify(path, ":~:."))
+    -- show it, the way a graphical IDE reveals what it just made
+    pcall(function()
+      require("lazy").load({ plugins = { "neo-tree.nvim" } })
+      require("neo-tree.command").execute({ action = "show", reveal_file = path })
+    end)
+  end)
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("IdeNewFile", function()
     M.pick()
   end, { desc = "New file from a template" })
+
+  vim.api.nvim_create_user_command("IdeNewPackage", function()
+    local dir = vim.fn.expand("%:p:h")
+    if dir == "" or not vim.uv.fs_stat(dir) then
+      dir = vim.fn.getcwd()
+    end
+    M.new_package(dir)
+  end, { desc = "New package (nested directories from a dotted name)" })
 end
 
 return M

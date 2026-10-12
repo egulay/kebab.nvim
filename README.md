@@ -246,7 +246,7 @@ If a server rejects the connection with `FATAL: invalid value for parameter
 Timezone` answering `Turkey`, `Japan`, `Poland`, anything without a `/`). The
 JVM repeats that name verbatim and a server whose tzdata has no
 backward-compatibility links refuses it. Set
-`vim.g.kebab_jdbc_timezone = "Europe/Istanbul"` — or fix it for every program
+`vim.g.kebab_jdbc_timezone = "Europe/Berlin"` — or fix it for every program
 on the machine with `timedatectl set-timezone <Area/Location>`.
 
 Completion knows tables, `customers.` → that table's columns with their types,
