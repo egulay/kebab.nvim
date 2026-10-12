@@ -35,7 +35,7 @@ vim.defer_fn(function()
       out[#out + 1] = "STATEMENT " .. table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), " / ")
     end
     if vim.b[b].kebab_db_output then
-      out[#out + 1] = "ROWS " .. table.concat(vim.api.nvim_buf_get_lines(b, 0, 4, false), " / ")
+      out[#out + 1] = "ROWS " .. table.concat(vim.api.nvim_buf_get_lines(b, 0, 10, false), " / ")
     end
     if vim.bo[b].filetype == "dbui" then
       out[#out + 1] = "TREE " .. table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), " / ")
@@ -82,6 +82,7 @@ cat > "$work/case.json" <<JSON
 JSON
 run_case 42000
 check "a double click on a table writes the select" "STATEMENT.*select .* from" "$work/report.txt"
+check "the pager says where you are"                 "ROWS.*rows 1-1 of 1"     "$work/report.txt"
 check "and shows its rows"                          "ROWS.*Ada Lovelace"       "$work/report.txt"
 check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    "$work/report.txt"
 
