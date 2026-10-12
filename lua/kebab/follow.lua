@@ -403,6 +403,54 @@ end
 
 ---Record a change, to be acted on after the debounce window.
 ---@param path string
+-- Paths this editor has just written, and when. The watcher cannot tell who
+-- wrote a file, so without this a manual :w fires Ghost Mode exactly like an
+-- agent's write: the badge lights, and the view can jump to the file you are
+-- already in. Reported as "I manually edit a file. I edit not an LLM... and
+-- still shows me ghost mode".
+local OWN = {}
+
+---How long after our own write a change to that path is still ours.
+---
+---Generous enough to cover the watcher's latency and the debounce, short
+---enough that a genuine external write moments after your save is not missed.
+function M.own_write_ms()
+  local cfg = M.config()
+  local n = tonumber(cfg.own_write_ms)
+  if n and n >= 0 then
+    return n
+  end
+  return 1500
+end
+
+---Remember that we wrote this path.
+---@param path string
+function M.note_own_write(path)
+  if type(path) ~= "string" or path == "" then
+    return false
+  end
+  OWN[vim.fs.normalize(path)] = vim.uv.now()
+  return true
+end
+
+---Was this change ours? Consumes the record, so a second change to the same
+---path -- an agent writing it right after you did -- is not swallowed too.
+---@param path string
+function M.is_own_write(path)
+  local key = vim.fs.normalize(path)
+  local at = OWN[key]
+  if not at then
+    return false
+  end
+  OWN[key] = nil
+  return (vim.uv.now() - at) <= M.own_write_ms()
+end
+
+---Forget every noted write. Called by stop(), so a new session starts clean.
+function M.forget_own_writes()
+  OWN = {}
+end
+
 function M.on_change(path)
   -- Events in flight when stop() ran must not arm a new timer: stop() early
   -- returns on `not STATE.running`, so it could never close it again and every
@@ -412,6 +460,12 @@ function M.on_change(path)
   end
   local cfg = M.config()
   if M.ignored(path, cfg) then
+    return false
+  end
+  -- Our own save is not an external change. The whole feature is "something
+  -- else touched this project", and a badge that lights when *you* press :w
+  -- says nothing.
+  if M.is_own_write(path) then
     return false
   end
   STATE.seq = (STATE.seq or 0) + 1
@@ -554,6 +608,7 @@ function M.start(root)
 end
 
 function M.stop()
+  M.forget_own_writes()
   if not STATE.running then
     -- Still tidy up: a timer armed by an event that arrived during the last
     -- stop would otherwise stay open for the session.
@@ -664,6 +719,22 @@ function M.setup()
   end, { desc = "Report what the follower is doing" })
 
   local group = vim.api.nvim_create_augroup("kebab_follow", { clear = true })
+
+  -- Our own writes, noted before the watcher reports them. BufWritePost is
+  -- the whole buffer; FileWritePost is a partial write (`:'<,'>w file`), and a
+  -- formatter saving on top of your save goes through the same events.
+  vim.api.nvim_create_autocmd({ "BufWritePost", "FileWritePost", "FileAppendPost" }, {
+    group = group,
+    callback = function(ev)
+      local path = ev.file
+      if path == nil or path == "" then
+        path = vim.fn.expand("<afile>:p")
+      end
+      if path ~= "" then
+        M.note_own_write(vim.fn.fnamemodify(path, ":p"))
+      end
+    end,
+  })
 
   -- Stopping on exit matters: an inotify watch with a dead callback is a leak.
   vim.api.nvim_create_autocmd({ "VimLeavePre", "VimLeave", "QuitPre" }, {

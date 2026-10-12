@@ -296,6 +296,74 @@ H.describe("the watcher", function()
     H.ok(seen, "the watcher should have noticed the write")
   end)
 
+  H.it("ignores a file this editor just saved", function()
+    -- The feature is "something *else* touched this project". The watcher
+    -- cannot tell who wrote a file, so a manual :w fired it exactly like an
+    -- agent's write: the badge lit and the view could jump to the file you
+    -- were already editing. Reported as "I manually edit a file. I edit not an
+    -- LLM... and still shows me ghost mode".
+    local dir = H.tmpdir("follow-own")
+    local mine = dir .. "/mine.txt"
+    H.write(mine, "before")
+    local ok, err = F.start(dir)
+    H.ok(ok, tostring(err))
+
+    vim.cmd("edit " .. vim.fn.fnameescape(mine))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "edited by me" })
+    vim.cmd("silent write")
+
+    -- give the watcher longer than it needs, so a pass is not just a race won
+    local fired = vim.wait(3000, function()
+      return F.state().pending > 0 or F.state().count > 0
+    end, 100)
+    local state = F.state()
+    F.stop()
+    H.eq(false, fired, "our own save must not register as an external change")
+    H.eq(0, state.count, "and must not be followed")
+  end)
+
+  H.it("still follows an external write to a file we saved earlier", function()
+    -- The record is consumed, so an agent writing the same file moments after
+    -- you did is not swallowed as well.
+    local dir = H.tmpdir("follow-own-then")
+    local path = dir .. "/shared.txt"
+    H.write(path, "before")
+    local ok, err = F.start(dir)
+    H.ok(ok, tostring(err))
+
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "mine" })
+    vim.cmd("silent write")
+    vim.wait(1200, function() return false end, 100)
+
+    vim.system({ "sh", "-c", ("printf 'theirs\n' > %q"):format(path) }):wait(20000)
+    local seen = vim.wait(10000, function()
+      return F.state().pending > 0 or F.state().count > 0
+    end, 100)
+    F.stop()
+    H.ok(seen, "a later external write to the same file must still be followed")
+  end)
+
+  H.it("forgets its own writes when it stops", function()
+    F.note_own_write("/tmp/kebab-own-write-test")
+    H.eq(true, F.is_own_write("/tmp/kebab-own-write-test"))
+    F.note_own_write("/tmp/kebab-own-write-test")
+    F.stop()
+    H.eq(false, F.is_own_write("/tmp/kebab-own-write-test"),
+      "a new session should not inherit the last one's writes")
+  end)
+
+  H.it("treats a write older than own_write_ms as somebody else's", function()
+    -- Otherwise a path saved once would be deaf to external change for ever.
+    local saved = vim.g.kebab_follow
+    vim.g.kebab_follow = { own_write_ms = 0 }
+    F.note_own_write("/tmp/kebab-stale-write")
+    vim.wait(30, function() return false end, 10)
+    local own = F.is_own_write("/tmp/kebab-stale-write")
+    vim.g.kebab_follow = saved
+    H.eq(false, own)
+  end)
+
   H.it("reports what it is doing", function()
     local s = F.state()
     H.eq("boolean", type(s.running))
