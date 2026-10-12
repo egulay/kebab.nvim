@@ -43,9 +43,12 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 public final class KebabJdbc {
 
@@ -255,12 +258,135 @@ public final class KebabJdbc {
 
   private static void tables(Connection conn) throws SQLException {
     DatabaseMetaData md = conn.getMetaData();
+    boolean all = "1".equals(System.getenv("KEBAB_DB_ALL_SCHEMAS"));
+    Set<String> system = systemSchemas(md);
     try (ResultSet rs = md.getTables(null, null, "%", new String[] {"TABLE", "VIEW"})) {
       while (rs.next()) {
         String schema = rs.getString("TABLE_SCHEM");
         String name = rs.getString("TABLE_NAME");
+        if (!all && isSystemSchema(system, schema)) continue;
         System.out.println(qualify(schema, name));
       }
+    }
+  }
+
+  /**
+   * The schemas a database keeps its own catalog in.
+   *
+   * <p>Why this is here: `getTables(null, null, "%")` means every schema the
+   * user can see, and on two of the drivers this layer supports that is almost
+   * entirely the server's own. Measured against real servers: 616 tables on a
+   * fresh SQL Server, of which 589 are `sys` and 21 `INFORMATION_SCHEMA` -- six
+   * were the user's. 2051 on a fresh Oracle, of which two were the user's. The
+   * data source tree lists what this returns, so an Oracle connection was
+   * unusable: the tables you are looking for are somewhere inside two thousand
+   * entries named after the data dictionary. PostgreSQL's driver already
+   * excludes its own, which is why nobody noticed.
+   *
+   * <p>`KEBAB_DB_ALL_SCHEMAS=1` turns the filter off, for the rare case of
+   * actually wanting to read the catalog -- and for a user whose own schema
+   * collides with a name below.
+   */
+  private static Set<String> systemSchemas(DatabaseMetaData md) {
+    String product;
+    try {
+      product = md.getDatabaseProductName() == null ? "" : md.getDatabaseProductName().toLowerCase();
+    } catch (SQLException e) {
+      product = "";
+    }
+    Set<String> out = new HashSet<>();
+    if (product.contains("oracle")) {
+      out.addAll(
+          Arrays.asList(
+              "sys", "system", "xdb", "mdsys", "ctxsys", "dbsnmp", "outln", "audsys", "orddata",
+              "ordsys", "lbacsys", "olapsys", "appqossys", "dvsys", "gsmadmin_internal", "wmsys",
+              "si_informtn_schema", "dbsfwuser", "ggsys", "remote_scheduler_agent", "anonymous",
+              "dip", "oracle_ocm", "sysbackup", "sysdg", "syskm", "sysrac", "sys$umf", "pdbadmin",
+              "oml$metadata", "rdsadmin"));
+    } else if (product.contains("microsoft sql server")) {
+      out.addAll(Arrays.asList("sys", "information_schema"));
+    } else if (product.contains("mysql") || product.contains("mariadb")) {
+      out.addAll(Arrays.asList("information_schema", "mysql", "performance_schema", "sys"));
+    } else if (product.contains("postgresql")) {
+      out.addAll(Arrays.asList("pg_catalog", "information_schema", "pg_toast"));
+    } else if (product.contains("clickhouse")) {
+      out.addAll(Arrays.asList("system", "information_schema"));
+    } else if (product.contains("h2")) {
+      out.add("information_schema");
+    } else if (product.contains("duckdb")) {
+      out.addAll(Arrays.asList("information_schema", "pg_catalog"));
+    }
+    return out;
+  }
+
+  /** Oracle's packaged applications bring whole families of schemas. */
+  private static final String[] SYSTEM_SCHEMA_PREFIXES = {"apex_", "flows_", "ords_"};
+
+  private static boolean isSystemSchema(Set<String> system, String schema) {
+    if (schema == null || schema.isEmpty()) return false;
+    String lower = schema.toLowerCase();
+    if (system.contains(lower)) return true;
+    for (String prefix : SYSTEM_SCHEMA_PREFIXES) {
+      if (lower.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The schema and table as the catalog spells them.
+   *
+   * <p>DatabaseMetaData matches identifiers *exactly*, and a database that
+   * folds unquoted names to one case stores them in that case: on Oracle
+   * `kebab_items` is `KEBAB_ITEMS`, so asking for the columns of the name the
+   * user typed returned nothing at all -- an empty structure panel with no
+   * error, which is the worst of the available outcomes. The name that comes
+   * from the data source tree is already the stored one, so clicking worked
+   * and typing did not.
+   *
+   * <p>Resolved by asking the catalog: the name as given, then the case the
+   * driver says it stores, then a case-insensitive scan. Falls back to what
+   * was asked for, so the caller still gets its empty result and not an error.
+   */
+  private static String[] resolveTable(DatabaseMetaData md, String schema, String name)
+      throws SQLException {
+    String[] asked = new String[] {schema, name};
+    if (name == null || name.isEmpty()) return asked;
+    if (tableExists(md, schema, name)) return asked;
+
+    List<String[]> candidates = new ArrayList<>();
+    if (md.storesUpperCaseIdentifiers()) {
+      candidates.add(new String[] {schema == null ? null : schema.toUpperCase(), name.toUpperCase()});
+    }
+    if (md.storesLowerCaseIdentifiers()) {
+      candidates.add(new String[] {schema == null ? null : schema.toLowerCase(), name.toLowerCase()});
+    }
+    for (String[] candidate : candidates) {
+      if (tableExists(md, candidate[0], candidate[1])) return candidate;
+    }
+
+    // Last resort: the driver may fold differently again, or the name may be
+    // genuinely mixed case in a quoted-identifier database.
+    try (ResultSet rs = md.getTables(null, null, "%", new String[] {"TABLE", "VIEW"})) {
+      while (rs.next()) {
+        String foundSchema = rs.getString("TABLE_SCHEM");
+        String foundName = rs.getString("TABLE_NAME");
+        if (foundName == null || !foundName.equalsIgnoreCase(name)) continue;
+        if (schema != null && !schema.isEmpty()
+            && (foundSchema == null || !foundSchema.equalsIgnoreCase(schema))) {
+          continue;
+        }
+        return new String[] {foundSchema, foundName};
+      }
+    }
+    return asked;
+  }
+
+  private static boolean tableExists(DatabaseMetaData md, String schema, String name)
+      throws SQLException {
+    try (ResultSet rs =
+        md.getTables(null, likeLiteral(md, schema), likeLiteral(md, name),
+            new String[] {"TABLE", "VIEW"})) {
+      return rs.next();
     }
   }
 
@@ -276,6 +402,9 @@ public final class KebabJdbc {
       name = table.substring(dot + 1);
     }
     DatabaseMetaData md = conn.getMetaData();
+    String[] resolved = resolveTable(md, schema, name);
+    schema = resolved[0];
+    name = resolved[1];
     try (ResultSet rs = md.getColumns(null, likeLiteral(md, schema), likeLiteral(md, name), "%")) {
       while (rs.next()) {
         System.out.println(
@@ -316,6 +445,9 @@ public final class KebabJdbc {
       name = table.substring(dot + 1);
     }
     DatabaseMetaData md = conn.getMetaData();
+    String[] resolved = resolveTable(md, schema, name);
+    schema = resolved[0];
+    name = resolved[1];
     String schemaPattern = likeLiteral(md, schema);
     String namePattern = likeLiteral(md, name);
 
@@ -437,10 +569,14 @@ public final class KebabJdbc {
 
   private static void schema(Connection conn) throws SQLException {
     DatabaseMetaData md = conn.getMetaData();
+    boolean all = "1".equals(System.getenv("KEBAB_DB_ALL_SCHEMAS"));
+    Set<String> system = systemSchemas(md);
     List<String> names = new ArrayList<>();
     try (ResultSet rs = md.getTables(null, null, "%", new String[] {"TABLE", "VIEW"})) {
       while (rs.next()) {
-        names.add(qualify(rs.getString("TABLE_SCHEM"), rs.getString("TABLE_NAME")));
+        String schema = rs.getString("TABLE_SCHEM");
+        if (!all && isSystemSchema(system, schema)) continue;
+        names.add(qualify(schema, rs.getString("TABLE_NAME")));
       }
     }
     for (String full : names) {
