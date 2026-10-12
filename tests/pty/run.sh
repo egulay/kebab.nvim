@@ -310,7 +310,15 @@ check "db mode leaves exactly three windows"   "COUNT 3"              "$work/rep
 check "the file tree is not one of them"       -v                     "$work/report.txt" "neo-tree"
 check "the explorer window is pinned"          "ft=dbui fixbuf=true"  "$work/report.txt"
 check "the rows window is pinned"              "ft=dbout fixbuf=true" "$work/report.txt"
-check "the statement window is not pinned"     "ft=sql fixbuf=false"  "$work/report.txt"
+# The reported bug, and the reason this case clicks a tab at all: the file
+# went into the *tree's* window. So what matters afterwards is that a.go is in
+# the statement column (36, beside the tree at 0) and that the window took it,
+# i.e. is not pinned. This used to assert the statement pane still held its
+# .sql -- which was only ever true because the case's clicks were silently not
+# happening: it aimed at a tree node that needs a connection expanded first,
+# the target never appeared, and the driver gave up before the tab click.
+check "clicking a tab loads the file beside the tree, not into it" \
+  "col=36 ft=go fixbuf=false name=a.go" "$work/report.txt"
 
 # --- no files open: the splash screen must not survive ---------------------
 #
