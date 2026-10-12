@@ -47,7 +47,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             sqlite3 inotify-tools unzip curl jq fontconfig \
-            python3-venv nodejs npm
+            python3-venv nodejs npm \
+            xdg-utils
           # lazygit: LazyVim binds <leader>gg only when it is installed, and
           # three menu entries advertise that key
           # from the redirect, not the API: the API is rate limited per IP

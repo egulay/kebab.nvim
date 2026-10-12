@@ -104,6 +104,14 @@ end)
 
 H.describe("handing a file to the desktop", function()
   H.it("runs the platform's opener with the path", function()
+    -- The only test here that needs a real one. A machine with no xdg-open is
+    -- legitimate -- `kebab doctor` lists it as optional -- and a container
+    -- without xdg-utils is what caught this: three tests failed for want of a
+    -- desktop rather than for want of correct code.
+    local argv, why = X.opener()
+    if not argv then
+      H.skip(why or "no desktop opener on this machine")
+    end
     local dir = H.tmpdir("ext-open")
     local pdf = write_bytes(dir .. "/report.pdf", "%PDF-1.7")
     local seen
@@ -147,14 +155,20 @@ H.describe("handing a file to the desktop", function()
   H.it("falls back when the spawn itself throws", function()
     -- vim.system throws ENOENT for a missing executable rather than returning
     -- a code, which is the trap deps.lua and scaffold.lua already guard.
+    --
+    -- `sh` as the configured opener, not the platform's: this is about what
+    -- happens when the spawn throws, and on a machine with no xdg-open the
+    -- function returned before ever reaching the spawn -- so the test failed
+    -- with "no desktop opener found" and proved nothing about the throw.
     local dir = H.tmpdir("ext-throw")
     local png = write_bytes(dir .. "/logo.png", "bytes")
-    local reason
-    local started = X.open(png, {
-      spawn = function() error("ENOENT: no such file or directory") end,
-      fallback = function(why) reason = why end,
-      notify = false,
-    })
+    local reason, started
+    with_config({ command = { "sh" }, notify = false }, function()
+      started = X.open(png, {
+        spawn = function() error("ENOENT: no such file or directory") end,
+        fallback = function(why) reason = why end,
+      })
+    end)
     H.falsy(started)
     H.matches("ENOENT", tostring(reason))
   end)
@@ -165,8 +179,12 @@ H.describe("handing a file to the desktop", function()
     local txt = write_bytes(dir .. "/notes.txt", "hello")
     local calls = 0
     local spawn = function() calls = calls + 1 return {} end
-    H.ok(X.handle(png, { spawn = spawn, notify = false }))
-    H.falsy(X.handle(txt, { spawn = spawn, notify = false }))
+    -- a configured opener, so the count is about the decision and not about
+    -- whether this machine has a desktop
+    with_config({ command = { "sh" }, notify = false }, function()
+      H.ok(X.handle(png, { spawn = spawn }))
+      H.falsy(X.handle(txt, { spawn = spawn }))
+    end)
     H.eq(1, calls, "the text file must not be handed to the desktop")
   end)
 end)
