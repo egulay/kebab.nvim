@@ -299,8 +299,8 @@ end
 function M.pager_line(c, info)
   local K = require("kebab.keys")
   local how = ("-- run %s · next %s · back %s · first %s · re-run %s"):format(
-    K.human("<C-CR>"), K.human("<S-A-Right>"), K.human("<S-A-Left>"),
-    K.human("<S-A-Home>"), K.human("<S-A-R>"))
+    K.human("<C-CR>"), K.human("<leader>Dn"), K.human("<leader>Db"),
+    K.human("<leader>Df"), K.human("<leader>DR"))
   if not info then
     return ("-- %s"):format(c.name), how
   end
@@ -573,14 +573,23 @@ function M.bind_pager(buf)
   -- the pane where you *edit* SQL means pressing R to replace a word re-ran
   -- the query instead.
   --
-  -- Shift+Alt with the arrows and Home. Plain Alt+Left/Right was the third
-  -- choice and still wrong: nothing in Neovim or in the window manager claims
-  -- it, but a terminal commonly sends it as the readline word-jump, so it
-  -- never reaches the editor. Shift+Alt is left alone by all of them, and
-  -- plain Alt is deliberately vacated.
+  -- A leader sequence, after three goes at a modified key all failed for the
+  -- same reason: something upstream of the editor eats it.
+  --
+  --   ]p / [p / R    built-in Vim commands -- put-with-indent and Replace
+  --                  mode -- shadowed in the pane where you edit SQL
+  --   Alt+Left/Right the terminal commonly sends it as the readline word-jump,
+  --                  so it never arrives
+  --   Shift+Alt+...  the terminal changes tab with it
+  --
+  -- Nothing between the keyboard and Neovim can claim `Space D n`: a terminal
+  -- forwards the letters, a window manager never sees them, and the only thing
+  -- that could collide is another Neovim mapping -- which is checkable, and
+  -- checked. Do not go back to a modified key here.
   --
   -- Ctrl+Enter is Run, which is what a graphical database IDE uses and works
-  -- in insert mode too.
+  -- in insert mode too. It survives because Ctrl+Enter is a single keypress a
+  -- terminal passes through, not a chord the terminal wants for itself.
   local keys = {
     ["<leader>Dr"] = { function() M.run_current() end, "Run the statement" },
     -- dadbod-ui binds <leader>S in a sql buffer once it is loaded, which is
@@ -589,12 +598,10 @@ function M.bind_pager(buf)
     -- filetype is, so ours wins; it is not *advertised* anywhere, because
     -- outside these two panes the same key is snacks' scratch-buffer picker.
     ["<leader>S"] = { function() M.run_current() end, "Run the statement" },
-    ["<S-A-Right>"] = { function() M.turn_page(1) end, "Next page of rows" },
-    ["<S-A-Left>"] = { function() M.turn_page(-1) end, "Previous page of rows" },
-    ["<S-A-Home>"] = { function() M.first_page() end, "First page of rows" },
-    -- Shift+r is R, so this is stored as <M-R>; declaring it with the capital
-    -- keeps the label on screen the same as the key you press.
-    ["<S-A-R>"] = { function() M.refresh() end, "Re-run this page" },
+    ["<leader>Dn"] = { function() M.turn_page(1) end, "Next page of rows" },
+    ["<leader>Db"] = { function() M.turn_page(-1) end, "Previous page of rows" },
+    ["<leader>Df"] = { function() M.first_page() end, "First page of rows" },
+    ["<leader>DR"] = { function() M.refresh() end, "Re-run this page" },
   }
   for lhs, spec in pairs(keys) do
     vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })

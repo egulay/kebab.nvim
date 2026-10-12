@@ -620,8 +620,21 @@ client attached, file contents reverted.
   -- and would have given a driver added later whatever the default happened to
   be, though Firebird wants `ROWS` and DB2 `FETCH FIRST`. `paging_spec` fails
   if a driver registered in `kebab.jdbc` has no clause.
-- `<A-Right>` is stored as **`<M-Right>`**: a keymap lookup in a spec has to
-  use the `M-` form or it finds nothing.
+- **Do not put a feature on a modified key.** Three goes at the pager, three
+  failures, each for a different owner upstream of the editor: `]p`/`[p`/`R`
+  are built-in Vim commands (put-with-indent, Replace mode) and shadowing them
+  in an editing pane is indefensible; `Alt+Left/Right` is commonly sent by the
+  terminal as the readline word-jump, so it never arrives; `Shift+Alt+arrows`
+  changes the terminal's tab. Checking `nvim_get_keymap` says nothing about any
+  of these -- the key is taken *above* Neovim. A `<leader>` sequence cannot be:
+  a terminal forwards the letters, a window manager never sees them, and the
+  only possible collision is another Neovim mapping, which is checkable. The
+  pager is `<leader>Dn`/`Db`/`Df`/`DR`; Run keeps `<C-CR>`, which survives
+  because it is a keypress a terminal passes through rather than a chord it
+  wants.
+- `<A-Right>` is stored as **`<M-Right>`** and `<S-A-r>` as **`<M-R>`** (Shift+r
+  *is* R): a keymap lookup in a spec has to use the stored form or it finds
+  nothing.
 - **`<leader>S` is already taken** -- snacks owns it as "Select Scratch
   Buffer". A buffer-local mapping wins inside its own buffer, so Run worked in
   the SQL panes and opened a *picker* everywhere else, which is what the

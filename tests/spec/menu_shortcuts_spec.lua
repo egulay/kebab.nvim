@@ -37,12 +37,13 @@ local BUFFER_LOCAL = {
   -- for Run opened a picker anywhere else.
   ["<C-CR>"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>Dr"] = "kebab.dbide: bound on the statement and rows panes",
-  -- Shift+Alt, because plain Alt+Left/Right is commonly eaten by the terminal
-  -- as a readline word-jump, and `]p`, `[p` and `R` are built-in Vim commands.
-  ["<S-A-Right>"] = "kebab.dbide: bound on the statement and rows panes",
-  ["<S-A-Left>"] = "kebab.dbide: bound on the statement and rows panes",
-  ["<S-A-Home>"] = "kebab.dbide: bound on the statement and rows panes",
-  ["<S-A-R>"] = "kebab.dbide: bound on the statement and rows panes",
+  -- A leader sequence, because every modified key tried for these was eaten
+  -- before Neovim saw it: Alt+arrows by the terminal's word-jump, Shift+Alt by
+  -- the terminal's change-tab. `]p`, `[p` and `R` are built-in Vim commands.
+  ["<leader>Dn"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<leader>Db"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<leader>Df"] = "kebab.dbide: bound on the statement and rows panes",
+  ["<leader>DR"] = "kebab.dbide: bound on the statement and rows panes",
   ["<leader>ca"] = "LSP: bound on LspAttach",
   ["<leader>cr"] = "LSP: bound on LspAttach",
   ["gd"] = "LSP: bound on LspAttach",
