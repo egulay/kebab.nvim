@@ -159,6 +159,11 @@ items[#items + 1] = {
         if #vim.api.nvim_get_runtime_file("autoload/db_ui.vim", false) == 0 then
           return false, "vim-dadbod-ui is not on the runtimepath"
         end
+        -- An autoload function does not exist until its file is sourced, and
+        -- the <Plug> mapping is defined in the plugin file. Both happen on
+        -- their own in a session that has opened the explorer, which is why
+        -- this check passed in a full suite run and failed on its own.
+        pcall(vim.cmd, "runtime autoload/db_ui.vim")
         if vim.fn.maparg("<Plug>(DBUI_Redraw)", "n") == "" and vim.fn.exists("*db_ui#open") == 0 then
           return false, "dadbod-ui offers no redraw action"
         end

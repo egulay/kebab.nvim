@@ -19,9 +19,119 @@ local M = {}
 -- fn -> descriptor. Weak keys so a discarded menu does not pin its closures.
 local registry = setmetatable({}, { __mode = "k" })
 
+-- Windows belonging to a menu that is open right now. @see M.watch
+local tracked = {}
+
+---Note every floating window a menu session opens, so it can be closed again
+---even after its buffer is gone.
+---
+---Why it has to be the window and not the buffer: nvzone/menu closes the
+---clicked menu with `volt.close(buf)`, which feeds `q` to a buffer-local
+---mapping through `nvim_feedkeys(..., "x")`. From inside a mouse-click
+---handler -- itself running inside a feedkeys execution -- the nested call
+---does not run the mapping; what does happen is that the buffer gets wiped,
+---and Neovim leaves the float open showing an empty one. So the window
+---survives with no filetype to recognise it by, sitting over the screen and
+---holding the focus: a picker opened from Project > New Project... came up
+---unfocused, in normal mode, with typing-to-filter inert.
+---
+---Found by driving the wizard with a real mouse in tests/pty. None of it is
+---observable without a terminal, which is why every unit test passed.
+---@param which? string the menu module being opened, for the log only
+function M.watch(which)
+  tracked = {}
+  local group = vim.api.nvim_create_augroup("KebabMenuWindows", { clear = true })
+  local function note()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= "" then
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.bo[buf].filetype == "NvMenu" then
+          tracked[win] = which or true
+        end
+      end
+    end
+  end
+  -- The filetype is set after the window is created and after volt has drawn
+  -- it, so the scan is scheduled; a submenu opens later still, which is what
+  -- the autocmd is for.
+  vim.api.nvim_create_autocmd({ "WinNew", "BufWinEnter" }, {
+    group = group,
+    callback = function()
+      vim.schedule(note)
+    end,
+  })
+  vim.schedule(note)
+end
+
+---Close any right-click menu still on screen. @see M.watch
+---@return integer how many windows were closed
+local function close_menus()
+  local closed = 0
+  local function shut(win)
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= "" then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if pcall(vim.api.nvim_win_close, win, true) then
+        closed = closed + 1
+      end
+      if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "NvMenu" then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+  end
+  for win in pairs(tracked) do
+    shut(win)
+  end
+  tracked = {}
+  -- Belt and braces: a menu this session did not see opened (another plugin's
+  -- entry point, a reload) is still recognisable while its buffer lives.
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative ~= "" then
+      if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == "NvMenu" then
+        shut(win)
+      end
+    end
+  end
+  if closed > 0 then
+    local ok, state = pcall(require, "menu.state")
+    if ok then
+      state.bufs, state.bufids, state.nested_menu = {}, {}, ""
+    end
+  end
+  return closed
+end
+
+---Exposed so a test can prove the cleanup happens, rather than only that a
+---menu opens.
+M.close_menus = close_menus
+
+---Every menu action goes through here, so every one of them closes the menu
+---first. @see close_menus
+---
+---When a menu really was closed the action runs one tick later. Closing the
+---window fires WinClosed, and nvzone's handler schedules a cleanup that puts
+---the focus back where it was before the menu opened. Running the action
+---straight away means that cleanup lands *after* it, and whatever the action
+---opened loses the focus: the project-type picker came up with its list
+---focused in normal mode instead of its input in insert mode, so typing to
+---filter did nothing. vim.schedule is FIFO, so one tick is enough -- the
+---cleanup was queued first. Invoked any other way (a keymap, a test) nothing
+---is closed and nothing is deferred, so the effect is still synchronous.
 local function register(fn, desc)
-  registry[fn] = desc
-  return fn
+  local wrapped = function(...)
+    if close_menus() > 0 then
+      -- `table.pack`/`table.unpack` do not exist in this LuaJIT; the global
+      -- `unpack` does. Getting that wrong made every menu entry do nothing at
+      -- all, reported by the click handler's pcall and nowhere else.
+      local args, nargs = { ... }, select("#", ...)
+      vim.schedule(function()
+        fn(unpack(args, 1, nargs))
+      end)
+      return
+    end
+    return fn(...)
+  end
+  registry[wrapped] = desc
+  return wrapped
 end
 
 ---Describe an action built by this module. nil for anything else.

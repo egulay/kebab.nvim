@@ -92,3 +92,69 @@ H.describe("opening a menu", function()
     end)
   end
 end)
+
+-- A menu that was clicked has to go away, including when its buffer is gone.
+--
+-- What happens in a real terminal: nvzone's click handler closes the clicked
+-- menu with `volt.close(buf)`, which feeds `q` to a buffer-local mapping
+-- through nvim_feedkeys. Called from inside a mouse-click handler that is
+-- itself a feedkeys execution, the nested call does not run the mapping -- but
+-- the buffer does get wiped, and Neovim leaves the float open showing an empty
+-- one. The result is an empty bordered box over the screen that also holds the
+-- focus, so a picker opened from a submenu came up unfocused in normal mode
+-- and typing to filter did nothing.
+--
+-- Simulated here rather than clicked: a float carrying nvzone's own filetype,
+-- then the same float with its buffer wiped, which is the case that cannot be
+-- recognised by filetype and is why kebab.menus.action tracks the window.
+H.describe("closing a menu that was clicked", function()
+  local A = require("kebab.menus.action")
+
+  local function float(ft)
+    local buf = vim.api.nvim_create_buf(false, true)
+    local win = vim.api.nvim_open_win(buf, false, {
+      relative = "editor", row = 1, col = 1, width = 20, height = 3, style = "minimal",
+    })
+    if ft then
+      vim.bo[buf].filetype = ft
+    end
+    return win, buf
+  end
+
+  H.it("closes a menu window still showing its own buffer", function()
+    local win = float("NvMenu")
+    local closed = A.close_menus()
+    H.ok(closed >= 1, "it should have closed something")
+    H.eq(false, vim.api.nvim_win_is_valid(win), "the menu float should be gone")
+  end)
+
+  H.it("closes a menu window whose buffer was already wiped", function()
+    local win, buf = float("NvMenu")
+    A.watch("kebab.menus.editor")
+    vim.wait(200, function() return false end) -- let the scheduled scan run
+    -- what the plugin does: wipe the buffer and leave the window behind
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    if not vim.api.nvim_win_is_valid(win) then
+      return H.ok(true, "this Neovim closed the float with its buffer")
+    end
+    A.close_menus()
+    H.eq(false, vim.api.nvim_win_is_valid(win), "the leftover float should be closed")
+  end)
+
+  H.it("leaves another plugin's float alone", function()
+    local win = float("snacks_picker_input")
+    A.close_menus()
+    local alive = vim.api.nvim_win_is_valid(win)
+    pcall(vim.api.nvim_win_close, win, true)
+    H.ok(alive, "only menu windows may be closed")
+  end)
+
+  H.it("runs the action anyway when there is no menu open", function()
+    -- The deferral only applies when a menu was closed: a keymap or a test
+    -- calls these directly and must still see the effect immediately.
+    local hit = false
+    local fn = A.custom("a test action", function() hit = true end, function() return true end)
+    fn()
+    H.ok(hit, "an action invoked with no menu open should run synchronously")
+  end)
+end)
