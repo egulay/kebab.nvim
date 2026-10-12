@@ -441,6 +441,85 @@ function M.paging_dialects()
   return vim.tbl_keys(PAGING)
 end
 
+-- How each database is asked for a query plan.
+--
+-- `prefix` is a single statement: the plan comes back as its result. `steps`
+-- is for the two that cannot do it in one -- SQL Server turns a session
+-- setting on, runs the statement, turns it off; Oracle stores the plan and
+-- then selects it out of a table function. Those need the *same connection*
+-- for all three, so they only work through the warm process; db.explain says
+-- so rather than returning a plan for a connection that was never set up.
+--
+-- analyze actually runs the statement. It is a separate action for that
+-- reason, and refused for anything that is not a select.
+local EXPLAIN = {
+  postgresql = {
+    prefix = "explain (format text) %s",
+    analyze = "explain (analyze, buffers, format text) %s",
+  },
+  -- `explain` alone gives SQLite's bytecode; the query plan is the useful one
+  sqlite = { prefix = "explain query plan %s" },
+  mysql = { prefix = "explain %s", analyze = "explain analyze %s" },
+  mariadb = { prefix = "explain %s", analyze = "explain analyze %s" },
+  h2 = { prefix = "explain %s", analyze = "explain analyze %s" },
+  duckdb = { prefix = "explain %s", analyze = "explain analyze %s" },
+  clickhouse = { prefix = "explain %s" },
+  sqlserver = {
+    steps = { "set showplan_all on", "%s", "set showplan_all off" },
+    plan_step = 2,
+    needs_session = true,
+  },
+  oracle = {
+    steps = { "explain plan for %s", "select plan_table_output from table(dbms_xplan.display())" },
+    plan_step = 2,
+    needs_session = true,
+  },
+}
+
+---The statements to run to get a plan for `sql`, and which one answers.
+---@param url string
+---@param sql string
+---@param analyze? boolean also execute the statement and report what happened
+---@return string[]|nil steps, integer|nil plan_step, string|nil err
+function M.explain_steps(url, sql, analyze)
+  local how = EXPLAIN[jdbc.subprotocol(url) or ""]
+  if not how then
+    return nil, nil, "this layer does not know how to explain a query on that database"
+  end
+  local inner = (sql:gsub("%s*;%s*$", ""))
+  if analyze then
+    if not inner:lower():match("^%s*with%s") and not inner:lower():match("^%s*select%s") then
+      -- ANALYZE executes. On an insert or an update that is a surprise nobody
+      -- wants from a button labelled "explain".
+      return nil, nil, "analyze runs the statement, so it is only offered for a select"
+    end
+    if not how.analyze then
+      return nil, nil, "that database has no analyze; plain explain is available"
+    end
+    return { how.analyze:format(inner) }, 1, nil
+  end
+  if how.steps then
+    local steps = {}
+    for i, step in ipairs(how.steps) do
+      steps[i] = step:find("%%s") and step:format(inner) or step
+    end
+    return steps, how.plan_step, nil
+  end
+  return { how.prefix:format(inner) }, 1, nil
+end
+
+---Does this database need one connection for all the steps?
+---@param url string
+function M.explain_needs_session(url)
+  local how = EXPLAIN[jdbc.subprotocol(url) or ""]
+  return how ~= nil and how.needs_session == true
+end
+
+---Which databases this layer can explain a query on.
+function M.explain_dialects()
+  return vim.tbl_keys(EXPLAIN)
+end
+
 ---A statement that counts the rows `sql` would return.
 ---
 ---Wrapped, like a page is, so it counts the user's own statement rather than a

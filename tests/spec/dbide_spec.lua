@@ -580,6 +580,89 @@ H.describe("paging the rows", function()
   end)
 end)
 
+H.describe("what the database will do with it", function()
+  -- The point of a plan when you are reading somebody else's database: a
+  -- sequential scan where you expected an index answers both "why is this
+  -- slow" and "is this table designed for this question".
+  local D = require("kebab.db")
+
+  H.it("asks each database the way that database asks", function()
+    local function steps(url, analyze)
+      return D.explain_steps(url, "select * from t where x = 1;", analyze)
+    end
+    H.eq({ "explain (format text) select * from t where x = 1" }, steps("jdbc:postgresql://h/d"))
+    -- `explain` alone gives SQLite's bytecode; the query plan is the useful one
+    H.eq({ "explain query plan select * from t where x = 1" }, steps("jdbc:sqlite:/x"))
+    H.eq({ "explain select * from t where x = 1" }, steps("jdbc:mysql://h/d"))
+  end)
+
+  H.it("uses several statements where one will not do, and says which answers", function()
+    -- SQL Server turns a session setting on, runs the statement, turns it off.
+    -- Oracle stores the plan and then selects it out of a table function.
+    local steps, plan = D.explain_steps("jdbc:sqlserver://h;database=d", "select 1")
+    H.eq(3, #steps)
+    H.eq("set showplan_all on", steps[1])
+    H.eq("set showplan_all off", steps[3])
+    H.eq(2, plan, "the middle one is the plan")
+    H.eq(true, D.explain_needs_session("jdbc:sqlserver://h;database=d"),
+      "all three have to be on one connection")
+
+    local osteps, oplan = D.explain_steps("jdbc:oracle:thin:@h/x", "select 1")
+    H.eq(2, #osteps)
+    H.matches("^explain plan for", osteps[1])
+    H.matches("dbms_xplan", osteps[2])
+    H.eq(2, oplan)
+  end)
+
+  H.it("refuses analyze on anything that is not a select", function()
+    -- analyze *executes* the statement. On an insert or an update that is a
+    -- surprise nobody wants from something labelled "explain".
+    local _, _, err = D.explain_steps("jdbc:postgresql://h/d", "update t set x = 1", true)
+    H.matches("only offered for a select", tostring(err))
+    local _, _, derr = D.explain_steps("jdbc:postgresql://h/d", "delete from t", true)
+    H.matches("only offered for a select", tostring(derr))
+    H.ok(D.explain_steps("jdbc:postgresql://h/d", "select 1", true), "a select is fine")
+    H.ok(D.explain_steps("jdbc:postgresql://h/d", "with x as (select 1) select * from x", true),
+      "and so is a CTE")
+  end)
+
+  H.it("says so for a database it cannot explain, rather than guessing", function()
+    local _, _, err = D.explain_steps("jdbc:firebirdsql://h/d", "select 1")
+    H.matches("does not know how to explain", tostring(err))
+    local _, _, aerr = D.explain_steps("jdbc:sqlite:/x", "select 1", true)
+    H.matches("no analyze", tostring(aerr), "and names what is available instead")
+  end)
+
+  H.it("explains a real join, and the plan names the index", function()
+    requires_jdbc()
+    vim.cmd("only")
+    local file = H.tmpdir("dbide-explain") .. "/shop.sqlite"
+    local sql = table.concat({
+      "create table customers (id integer primary key, email text);",
+      "create table orders (id integer primary key, customer_id integer, total integer);",
+      "create index orders_by_customer on orders (customer_id, total);",
+      "insert into customers (email) values ('a@example.com');",
+      "insert into orders (customer_id, total) values (1, 10);",
+    }, "\n")
+    H.eq(0, vim.system({ "sqlite3", file }, { stdin = sql, text = true }):wait(30000).code)
+
+    local c = { name = "shop", url = "jdbc:sqlite:" .. file }
+    I.layout(c)
+    I.run(c, "select o.id from orders o join customers c on c.id = o.customer_id where o.customer_id = 1")
+    H.ok(I.explain(false))
+
+    local out
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_output then out = b end
+    end
+    local text = table.concat(vim.api.nvim_buf_get_lines(out, 0, -1, false), "\n")
+    H.matches("plan", text)
+    H.matches("orders_by_customer", text, "the plan should name the index it chose; got: " .. text:sub(1, 300))
+    H.eq(nil, I.pager(c.url), "a plan is not a page of rows")
+  end)
+end)
+
 H.describe("one cell on its own", function()
   -- A grid is the wrong shape for a long value: a JSON document makes one
   -- column wider than the pane and pushes the rest off the side. Reading

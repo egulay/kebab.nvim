@@ -228,6 +228,7 @@ local database = {
   { name = "separator" },
   { name = "Browse Tables...", cmd = A.ex("IdeDbTables"), rtxt = "<leader>Dt" },
   { name = "Table Structure...", cmd = A.ex("IdeDbStructure"), rtxt = ":IdeDbStructure" },
+  { name = "Explain This Statement", cmd = A.ex("IdeDbExplain"), rtxt = "<leader>Dx" },
   { name = "separator" },
   { name = "Fetch Every Row", cmd = A.ex("IdeDbFetchAll"), rtxt = ":IdeDbFetchAll" },
   { name = "Count the Rows", cmd = A.ex("IdeDbCount"), rtxt = ":IdeDbCount" },

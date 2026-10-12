@@ -731,6 +731,8 @@ function M.bind_pager(buf)
     ["<leader>Db"] = { function() M.turn_page(-1) end, "Previous page of rows" },
     ["<leader>Df"] = { function() M.first_page() end, "First page of rows" },
     ["<leader>DR"] = { function() M.refresh() end, "Re-run this page" },
+    ["<leader>Dx"] = { function() M.explain(false) end, "Explain this statement" },
+    ["<leader>DX"] = { function() M.explain(true) end, "Explain and run it" },
   }
   for lhs, spec in pairs(keys) do
     vim.keymap.set("n", lhs, spec[1], { buffer = buf, desc = spec[2] })
@@ -820,6 +822,8 @@ function M.setup()
     IdeDbFetchAll = { M.fetch_all, "Every row of the current statement, in one grid" },
     IdeDbCount = { M.count, "How many rows the current statement returns" },
     IdeDbCell = { function() M.show_cell() end, "Show the cell under the cursor on its own" },
+    IdeDbExplain = { function() M.explain(false) end, "What the database will do with this statement" },
+    IdeDbExplainAnalyze = { function() M.explain(true) end, "Run it and report what it actually did" },
     IdeDbRunAll = { M.run_all, "Run every statement in this buffer" },
     IdeDbNextPage = { function() M.turn_page(1) end, "Next page of rows" },
     IdeDbPrevPage = { function() M.turn_page(-1) end, "Previous page of rows" },
@@ -831,6 +835,68 @@ function M.setup()
       spec[1]()
     end, { desc = spec[2] })
   end
+end
+
+-- -------------------------------------------------------------- explain
+--
+-- What the database will do with the statement, which is how you find out
+-- whether the schema in front of you supports the question being asked -- a
+-- sequential scan where you expected an index is the answer to "why is this
+-- slow" and to "is this table designed for this query".
+
+---Show the plan for the statement the grid is showing.
+---@param analyze? boolean also run it, and report what actually happened
+function M.explain(analyze)
+  local attached = db.attached()
+  local c = attached and (db.connection(attached.name) or attached) or nil
+  if not c then
+    return vim.notify("This buffer has no connection", vim.log.levels.WARN)
+  end
+  local pager = PAGES[c.url]
+  local sql = pager and pager.sql
+  if not sql then
+    -- no statement has been run: explain whatever is in the pane
+    local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    sql = vim.trim(text) ~= "" and text or nil
+  end
+  if not sql then
+    return vim.notify("Nothing to explain", vim.log.levels.WARN)
+  end
+
+  local steps, plan_step, err = db.explain_steps(c.url, sql, analyze)
+  if not steps then
+    return vim.notify(err, vim.log.levels.WARN)
+  end
+  if #steps > 1 and db.explain_needs_session(c.url) and not jdbc.daemon_enabled() then
+    -- The steps have to share a connection: a session setting applied on one
+    -- connection says nothing about a statement run on another.
+    return vim.notify(
+      "That database needs all three statements on one connection, so the warm process has to be on"
+        .. " (vim.g.kebab_jdbc_daemon)",
+      vim.log.levels.WARN
+    )
+  end
+
+  db.ensure_credentials(c.url)
+  local plan
+  for i, step in ipairs(steps) do
+    local lines, serr = db.query(c, step)
+    if not lines and i == plan_step then
+      return M.failed(c, serr)
+    end
+    if i == plan_step then
+      plan = lines
+    end
+  end
+  if not plan then
+    return M.failed(c, "the plan came back empty")
+  end
+
+  M.layout(c)
+  PAGES[c.url] = nil -- a plan is not a page of rows
+  local header = ("-- %s · %s"):format(c.name, analyze and "plan, and what it actually did" or "plan")
+  M.show_rows(c, vim.list_extend({ header, "" }, plan))
+  return true
 end
 
 -- ----------------------------------------------------------- one cell

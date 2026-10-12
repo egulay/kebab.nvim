@@ -320,6 +320,8 @@ Drivers come from Maven Central on first use; no native client needed.
 | Open a table | **double click it** | the select top right, its rows under it |
 | How a table is built | `:IdeDbStructure` | columns, keys both ways, indexes — or right-click → Table |
 | One cell on its own | `v` or `Enter` | in the grid: JSON indented, long text wrapped, `y` copies it |
+| What the database will do | `Space D x` | the query plan — a scan where you expected an index |
+| ...and what it did do | `Space D X` | runs it as well; selects only |
 | Every row | `a` | up to the cap; `c` counts them |
 | Run what you edited | `Ctrl+Enter` | in either pane, and in insert mode too; rows refresh below |
 | ...on one connection | `k e b a b   d b   name` | straight into a SQL console |

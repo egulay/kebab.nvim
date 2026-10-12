@@ -233,6 +233,27 @@ one line makes a column wider than the pane and pushes the rest off the side.
 `a` fetches every row (capped by `vim.g.kebab_db_fetch_all_cap`, 10000) and `c`
 counts them: on demand, never automatically, since `count(*)` is a full scan.
 
+`Space D x` asks what the database will *do* with the statement, which is how
+you find out whether a schema supports the question being asked:
+
+```
+-- shop · plan
+detail
+SEARCH c USING INTEGER PRIMARY KEY (rowid=?)
+SEARCH o USING COVERING INDEX orders_by_customer (customer_id=?)
+```
+
+Each database is asked the way it expects: `explain (format text)` on
+PostgreSQL, `explain query plan` on SQLite (plain `explain` there returns
+bytecode), `explain` on MySQL, MariaDB, H2, DuckDB and ClickHouse, and for SQL
+Server and Oracle the two or three statements they need — which have to share a
+connection, so those use the warm process and say so if it is off. `Space D X`
+adds ANALYZE where the database has it, and is refused for anything that is not
+a select, because ANALYZE executes the statement.
+
+Not provided, deliberately: an editable result grid and click-to-sort. Writing
+and ordering are SQL you type.
+
 | | |
 |---|---|
 | `<leader>DD` | Database explorer |
