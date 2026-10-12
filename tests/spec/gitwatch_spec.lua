@@ -8,6 +8,39 @@
 local H = ...
 local W = require("kebab.gitwatch")
 
+---Wait until the watcher is really receiving events, not merely started.
+---
+---`vim._watch.inotify` shells out to the `inotifywait` binary, and its watches
+---are not established when `start()` returns -- an event that happens before
+---they are is simply never delivered. Starting a watcher and committing
+---immediately therefore passed on an idle machine and failed in a full suite
+---run, which is exactly how "notices a push" came to fail about one run in
+---three. Rather than sleeping for a guessed interval, this touches a file
+---inside .git until a refresh lands, then lets the debounce drain so the probe
+---cannot be mistaken for the event under test.
+---@param repo string
+---@return boolean ready
+local function watching(repo)
+  local dir = W.git_dir(repo)
+  if not dir then
+    return false
+  end
+  local probe = dir .. "/kebab-watch-probe"
+  local deadline = vim.uv.now() + 10000
+  while vim.uv.now() < deadline do
+    local before = W.state().refreshes
+    pcall(vim.fn.writefile, { tostring(vim.uv.now()) }, probe)
+    if vim.wait(1500, function() return W.state().refreshes > before end, 25) then
+      os.remove(probe)
+      -- drain: the probe's own debounce must not be counted as the event
+      vim.wait(W.debounce_ms() + 250, function() return false end, 25)
+      return true
+    end
+  end
+  os.remove(probe)
+  return false
+end
+
 local function with_watch(fn)
   local was = W.running()
   if was then
@@ -67,6 +100,7 @@ H.describe("kebab.gitwatch", function()
       H.write(repo .. "/f.txt", "changed")
       local ok, err = W.start(repo)
       H.ok(ok, tostring(err))
+      H.ok(watching(repo), "the watcher should be receiving events before the commit")
       local before = W.state().refreshes
       git("add", "-A")
       git("commit", "-q", "-m", "external")
@@ -98,6 +132,7 @@ H.describe("kebab.gitwatch", function()
 
       local ok, err = W.start(work)
       H.ok(ok, tostring(err))
+      H.ok(watching(work), "the watcher should be receiving events before the push")
       local before = W.state().refreshes
       -- a push writes only .git/refs/remotes/..., so nothing in the working
       -- tree changes and no other watcher could possibly see it
@@ -116,6 +151,7 @@ H.describe("kebab.gitwatch", function()
     with_watch(function()
       local repo, git = H.git_repo("gw-burst")
       H.ok(W.start(repo))
+      H.ok(watching(repo), "the watcher should be receiving events before the burst")
       local before = W.state().refreshes
       -- one commit writes several files under .git; a rebase writes many
       for i = 1, 4 do
