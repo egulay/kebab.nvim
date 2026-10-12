@@ -218,7 +218,7 @@ if [ "$DO_SPEC" -eq 1 ]; then
           else print('ALREADY') end" \
       -c "qa!" 2>&1 | tail -n 1)
     case "$EXTRA_OUT" in
-      ADDED*) say "added neo-tree to lazyvim.json${EXTRA_OUT#ADDED}" ;;
+      ADDED*) say "added the neo-tree extra to $CONFIG/lazyvim.json" ;;
       ALREADY*) say "already recorded" ;;
       *) warn "could not update $CONFIG/lazyvim.json: ${EXTRA_OUT#ERR }"
          say "add \"lazyvim.plugins.extras.editor.neo-tree\" to its extras list by hand" ;;
