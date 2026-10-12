@@ -292,5 +292,47 @@ check "and still exactly three windows"              "COUNT 3"                "$
 check "Run is bound on the statement pane"           "KEYS statement.*C-CR"   "$work/report.txt"
 check "Run is bound on the rows pane too"            "KEYS rows.*C-CR"        "$work/report.txt"
 
+# --- the pager bar is clickable --------------------------------------------
+#
+# "WHICH COMBINATION AS A HUMAN BEING I SHOULD PRESS TO EXECUTE NEXT OR
+# PREVIOUS PAGE?" -- a fair question about a three-keystroke leader sequence.
+# The bar reads "[ n next ]  [ p prev ]" and both the letter and a click work.
+# Only a real terminal can be clicked.
+cat > "$work/barchild.lua" <<'LUA'
+vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
+vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
+vim.g.kebab_db_page_size = 1
+require("kebab.cli").db("")
+vim.defer_fn(function()
+  require("kebab.dbide").open_table(require("kebab.db").connection("shop"), "customers")
+end, 7000)
+vim.defer_fn(function()
+  local out = {}
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local b = vim.api.nvim_win_get_buf(w)
+    if vim.b[b].kebab_db_output then
+      local pos = vim.api.nvim_win_get_position(w)
+      out[#out + 1] = ("ROWSWIN row=%d col=%d"):format(pos[1], pos[2])
+      for i, line in ipairs(vim.api.nvim_buf_get_lines(b, 0, 2, false)) do
+        out[#out + 1] = ("LINE%d %s"):format(i, line)
+      end
+    end
+  end
+  vim.fn.writefile(out, vim.env.REPORT)
+  vim.cmd("qa!")
+end, tonumber(vim.env.REPORT_AFTER) or 30000)
+LUA
+cat > "$work/case.json" <<JSON
+{ "nvim_args": ["-n", "-c", "luafile $work/barchild.lua"],
+  "actions": [ {"kind":"wait","seconds":17},
+               {"kind":"click","col":45,"row":12,"button":0,"count":1},
+               {"kind":"wait","seconds":8} ],
+  "report": "$work/report.txt", "idle": 2, "limit": 100 }
+JSON
+rm -f "$work/report.txt"
+WORK="$work" REPORT_AFTER=30000 python3 -I "$here/drive.py" "$work/case.json" >/dev/null
+check "the rows pane shows a button bar"      "LINE2 -- \[ n next \]"  "$work/report.txt"
+check "clicking [ n next ] turns the page"    "LINE1.*page 2"           "$work/report.txt"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

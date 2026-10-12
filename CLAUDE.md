@@ -620,6 +620,28 @@ client attached, file contents reverted.
   -- and would have given a driver added later whatever the default happened to
   be, though Firebird wants `ROWS` and DB2 `FETCH FIRST`. `paging_spec` fails
   if a driver registered in `kebab.jdbc` has no clause.
+- **Choose a key from the surface and the frequency, not from Vim convention.**
+  The pager cost four attempts because it was bound on *both* panes by one
+  function, so every candidate had to be safe in an editable buffer -- which
+  is what forced a modifier, and then a leader sequence, and then a three-key
+  sequence for the most-pressed control in the pane. Split the surfaces
+  instead:
+  - a **read-only** surface (the rows grid, a tree, a report) has every plain
+    letter free: nothing to paste into, nothing to replace, no search to
+    continue. A frequent action there is **one key, and clickable**.
+  - an **editable** surface keeps its letters for editing. A frequent action
+    there earns a modifier a terminal passes through (`<C-CR>`).
+  - a **rare** action belongs in a `<leader>` namespace, where three
+    keystrokes cost nothing.
+  `]p`/`[p` and a `<leader>` namespace are idiomatic Vim, and idiom was the
+  wrong thing to optimise for: the question is what the person presses. Said
+  plainly, after four goes: "single buttons was the solution... why we used
+  combinations if we could assign single buttons on non edit modes".
+- **A sequence shown on screen needs its separators.** `Space D D` was my
+  half-fix for `<leader>DD`: the tokens were translated but a three-keystroke
+  sequence with a shift in the middle is still not a control anyone wants for
+  a pager. If the answer to "what do I press" is longer than a few words, the
+  binding is wrong, not the label.
 - **Do not put a feature on a modified key.** Three goes at the pager, three
   failures, each for a different owner upstream of the editor: `]p`/`[p`/`R`
   are built-in Vim commands (put-with-indent, Replace mode) and shadowing them

@@ -206,6 +206,7 @@ function M.output(c)
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "dbout"
   M.bind_pager(buf)
+  M.bind_rows(buf)
   local out = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(out, buf)
   pin(out)
@@ -227,7 +228,7 @@ function M.show_rows(c, lines)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })
-  return true
+  return win
 end
 
 -- ----------------------------------------------------------------- the flow
@@ -288,21 +289,42 @@ function M.split_footer(lines)
   return rows, info
 end
 
----The pager line shown above the rows: where you are, then what to press.
+---The buttons on the rows pane, in order. Clickable, and each with a single
+---key, because the grid is read-only so plain letters are free there.
 ---
----Two lines, because the rows pane is about forty columns wide in the default
----layout and one line carrying the position *and* five shortcuts ran off the
----end of it.
+---A pager is pressed constantly. `Space D n` -- spacebar, Shift+D, n -- is
+---three keystrokes with a shift in the middle to turn a page, which is
+---indefensible for the most-used control in the pane, and was said so in
+---plain terms. These are one keypress, or one click.
+function M.buttons()
+  return {
+    { key = "n", label = "next", desc = "Next page", action = function() M.turn_page(1) end },
+    { key = "p", label = "prev", desc = "Previous page", action = function() M.turn_page(-1) end },
+    { key = "f", label = "first", desc = "First page", action = function() M.first_page() end },
+    { key = "r", label = "re-run", desc = "Re-run this page", action = function() M.refresh() end },
+  }
+end
+
+---The pager lines shown above the rows: where you are, then the buttons.
 ---@param c kebab.DbConnection
 ---@param info table|nil
----@return string where, string how
+---@return string where, string bar, table spans column ranges, 1-based inclusive
 function M.pager_line(c, info)
-  local K = require("kebab.keys")
-  local how = ("-- run %s · next %s · back %s · first %s · re-run %s"):format(
-    K.human("<C-CR>"), K.human("<leader>Dn"), K.human("<leader>Db"),
-    K.human("<leader>Df"), K.human("<leader>DR"))
+  local parts, spans = {}, {}
+  local text = "-- "
+  for _, b in ipairs(M.buttons()) do
+    local label = ("[ %s %s ]"):format(b.key, b.label)
+    spans[#spans + 1] = { from = #text + 1, to = #text + #label, key = b.key }
+    parts[#parts + 1] = label
+    text = text .. label .. "  "
+  end
+  local bar = "-- " .. table.concat(parts, "  ")
+
+  local run = ("   run: %s"):format(require("kebab.keys").human("<C-CR>"))
+  bar = bar .. run
+
   if not info then
-    return ("-- %s"):format(c.name), how
+    return ("-- %s"):format(c.name), bar, spans
   end
   local size = M.page_size()
   local offset = info.offset or 0
@@ -312,10 +334,11 @@ function M.pager_line(c, info)
   local total = info.more and "more" or tostring(last)
   -- Where the rows came from is worth saying: "held" means the statement ran
   -- once and this is the next batch off the same result set, which is the only
-  -- mode that is consistent while someone else is writing to the table.
+  -- mode that stays consistent while someone else is writing to the table.
   local source = ({ cursor = "held", server = "re-queried", client = "skipped" })[info.kind or ""]
-  return ("-- %s · rows %d-%d of %s · page %d%s"):format(
-    c.name, first, last, total, page, source and (" · " .. source) or ""), how
+  local where = ("-- %s · rows %d-%d of %s · page %d%s"):format(
+    c.name, first, last, total, page, source and (" · " .. source) or "")
+  return where, bar, spans
 end
 
 ---Run `sql` and show its first page.
@@ -421,10 +444,14 @@ function M.fetch(c)
   return true
 end
 
----Put a page on screen.
+---Put a page on screen, with the button bar on line 2.
 function M.render(c, rows, info)
-  local where, how = M.pager_line(c, info)
-  M.show_rows(c, vim.list_extend({ where, how, "" }, rows))
+  local where, bar, spans = M.pager_line(c, info)
+  local win = M.show_rows(c, vim.list_extend({ where, bar, "" }, rows))
+  if win then
+    -- where each button sits, so a click can be mapped to one
+    vim.b[vim.api.nvim_win_get_buf(win)].kebab_db_spans = spans
+  end
 end
 
 ---Report a failed statement where the rows would have been.
@@ -561,35 +588,6 @@ end
 ---pressed far too often to live three keys deep.
 ---@param buf integer
 function M.bind_pager(buf)
-  -- Every key here had to be checked against what it already means, because
-  -- the first two attempts both took keys that were taken.
-  --
-  -- `<leader>S` was the first: snacks owns it as "Select Scratch Buffer", so
-  -- the key advertised for Run opened a picker in every buffer but these two.
-  --
-  -- `]p`, `[p` and `R` were the second, and worse, because they are not
-  -- mappings at all -- they are **built-in Vim commands**. `]p` and `[p` put
-  -- with the indent adjusted, and `R` enters Replace mode. Shadowing those in
-  -- the pane where you *edit* SQL means pressing R to replace a word re-ran
-  -- the query instead.
-  --
-  -- A leader sequence, after three goes at a modified key all failed for the
-  -- same reason: something upstream of the editor eats it.
-  --
-  --   ]p / [p / R    built-in Vim commands -- put-with-indent and Replace
-  --                  mode -- shadowed in the pane where you edit SQL
-  --   Alt+Left/Right the terminal commonly sends it as the readline word-jump,
-  --                  so it never arrives
-  --   Shift+Alt+...  the terminal changes tab with it
-  --
-  -- Nothing between the keyboard and Neovim can claim `Space D n`: a terminal
-  -- forwards the letters, a window manager never sees them, and the only thing
-  -- that could collide is another Neovim mapping -- which is checkable, and
-  -- checked. Do not go back to a modified key here.
-  --
-  -- Ctrl+Enter is Run, which is what a graphical database IDE uses and works
-  -- in insert mode too. It survives because Ctrl+Enter is a single keypress a
-  -- terminal passes through, not a chord the terminal wants for itself.
   local keys = {
     ["<leader>Dr"] = { function() M.run_current() end, "Run the statement" },
     -- dadbod-ui binds <leader>S in a sql buffer once it is loaded, which is
@@ -618,7 +616,37 @@ function M.bind_pager(buf)
   end
 end
 
----Buffer-local keys for the statement pane.
+---The rows pane gets single keys and a clickable bar.
+---
+---Only here: the grid is read-only, so `n`, `p`, `f` and `r` are free -- there
+---is nothing to paste into, nothing to replace, and no search to continue. In
+---the statement pane those letters are editing commands and must stay that
+---way, which is why the leader sequence exists at all.
+---@param buf integer
+function M.bind_rows(buf)
+  for _, b in ipairs(M.buttons()) do
+    vim.keymap.set("n", b.key, b.action, { buffer = buf, desc = b.desc })
+  end
+  -- A click on a button runs it; a click anywhere else behaves like a click.
+  vim.keymap.set("n", "<LeftMouse>", function()
+    local pos = vim.fn.getmousepos()
+    local spans = vim.b[buf].kebab_db_spans
+    if pos.line == 2 and type(spans) == "table" then
+      for _, span in ipairs(spans) do
+        if pos.column >= span.from and pos.column <= span.to then
+          for _, b in ipairs(M.buttons()) do
+            if b.key == span.key then
+              return b.action()
+            end
+          end
+        end
+      end
+    end
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true), "n", false)
+  end, { buffer = buf, desc = "Click a pager button, or move the cursor" })
+end
+
+---Buffer-local keys for the statement pane.---Buffer-local keys for the statement pane.
 ---@param buf integer
 function M.bind_editor(buf)
   -- bind_pager already binds Run and the pager, buffer-locally, so they win

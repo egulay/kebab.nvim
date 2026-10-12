@@ -347,14 +347,23 @@ H.describe("paging the rows", function()
     -- Two lines: position, then the keys. Spelled out as keystrokes, and on
     -- keys that are free -- `]p`, `[p` and `R` are built-in Vim commands and
     -- the first version shadowed all three in the pane where you edit SQL.
-    local where, how = I.pager_line(c, { offset = 0, shown = 1, more = false })
+    local where, bar, spans = I.pager_line(c, { offset = 0, shown = 1, more = false })
     H.matches("rows 1%-1 of 1", where)
-    H.matches("next Space D n", how, "the keys belong on screen, as keys: " .. how)
-    H.matches("back Space D b", how)
-    H.matches("re%-run Space D R", how)
-    H.matches("run Ctrl%+Enter", how)
-    for _, line in ipairs({ where, how }) do
+    -- A pager is pressed constantly, so it is one keypress or one click, and
+    -- the bar says which: "[ n next ]". `Space D n` -- spacebar, Shift+D, n --
+    -- was three keystrokes with a shift in the middle to turn a page.
+    H.matches("%[ n next %]", bar, "the bar should read like buttons: " .. bar)
+    H.matches("%[ p prev %]", bar)
+    H.matches("%[ f first %]", bar)
+    H.matches("%[ r re%-run %]", bar)
+    H.matches("run: Ctrl%+Enter", bar)
+    for _, line in ipairs({ where, bar }) do
       H.ok(not line:find("<"), "no key-spec jargon on screen: " .. line)
+    end
+    -- and each button's columns, which is what makes it clickable
+    H.eq(4, #spans)
+    for _, span in ipairs(spans) do
+      H.matches("^%[ " .. span.key .. " ", bar:sub(span.from, span.to), "the span should cover its own button")
     end
   end)
 
@@ -491,6 +500,37 @@ H.describe("paging the rows", function()
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "select 'edited' as x" })
     I.turn_page(1)
     H.matches("rows 101%-200", header(), "editing the pane must not change what is paged")
+  end)
+
+  H.it("turns a page with one keypress in the grid", function()
+    -- The grid is read-only, so n, p, f and r are free there: nothing to paste
+    -- into, nothing to replace, no search to continue. In the statement pane
+    -- those letters are editing commands and must stay that way.
+    requires_jdbc()
+    vim.cmd("only")
+    local c = many()
+    H.ok(I.open_table(c, "nums"))
+    local buf = rows_pane()
+    local keys = {}
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+      keys[m.lhs] = m.desc
+    end
+    H.eq("Next page", keys.n)
+    H.eq("Previous page", keys.p)
+    H.eq("First page", keys.f)
+    H.eq("Re-run this page", keys.r)
+    H.ok(keys["<LeftMouse>"], "and the bar should be clickable")
+
+    -- the statement pane must keep its letters
+    local editor
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if vim.b[b].kebab_db_editor then editor = b end
+    end
+    for _, m in ipairs(vim.api.nvim_buf_get_keymap(editor, "n")) do
+      H.ok(m.lhs ~= "n" and m.lhs ~= "p" and m.lhs ~= "r",
+        ("%s must not be taken in the pane where you edit SQL"):format(m.lhs))
+    end
   end)
 
   H.it("binds the pager on both panes", function()
