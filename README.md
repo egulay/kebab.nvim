@@ -162,9 +162,9 @@ them, generated from the declarations themselves. An answer the chosen type does
 not ask for is reported rather than ignored, so a typo does not look like it
 worked.
 
-Project roots default to `~/Projects`, `~/src`, `~/code` and
-`~/dev`. Override with `KEBAB_PROJECT_ROOTS` (colon separated) or
-`vim.g.kebab_project_roots`. `KEBAB_DRY_RUN=1` prints the Lua a command would
+Project roots default to `~/Projects`, `~/src`, `~/code` and `~/dev` — generic
+conventions, not whatever your editor named a folder after itself. Override
+with `KEBAB_PROJECT_ROOTS` (colon separated) or `vim.g.kebab_project_roots`. `KEBAB_DRY_RUN=1` prints the Lua a command would
 run instead of running it.
 
 Each root is scanned two levels deep, so `~/Projects/work/<project>` is found

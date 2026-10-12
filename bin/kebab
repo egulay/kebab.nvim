@@ -52,8 +52,8 @@
 #
 # Set KEBAB_DRY_RUN=1 to print the Lua a command would run instead of running it.
 #
-# Project roots default to ~/Projects, ~/src, ~/code and
-# ~/dev; override with KEBAB_PROJECT_ROOTS as a colon-separated
+# Project roots default to ~/Projects, ~/src, ~/code and ~/dev; override with
+# KEBAB_PROJECT_ROOTS as a colon-separated
 # list. Set KEBAB_NVIM to use a particular Neovim binary.
 set -euo pipefail
 

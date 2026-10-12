@@ -14,6 +14,13 @@ local M = {}
 
 local uv = vim.uv
 
+-- Generic conventions only. A graphical IDE creates a directory named after
+-- itself for its projects, and three of those were in this list -- which put a
+-- vendor's product name in a public repository, with a note excusing it. The
+-- machine's own layout belongs in the user's config, which is not published:
+--
+--   vim.g.kebab_project_roots = { "~/Projects", "~/SomeDir" }
+--   KEBAB_PROJECT_ROOTS=~/Projects:~/SomeDir
 local DEFAULT_ROOTS = {
   "~/Projects",
   "~/src",
@@ -64,7 +71,7 @@ end
 ---($KEBAB_PROJECT_ROOTS) or "default".
 ---
 ---Worth distinguishing because the defaults deliberately name roots most
----machines do not have -- ~/src on a box that never ran that IDE --
+---machines do not have -- ~/src on a box that keeps its work elsewhere --
 ---so a missing default is not a problem, while a missing root the user asked
 ---for by name is.
 ---@return "g"|"env"|"default"
@@ -494,7 +501,7 @@ function M.new_project()
   end)
 end
 
--- a graphical editor style: you already made and opened the folder, now fill it in.
+-- The other way round: you already made and opened the folder, now fill it in.
 function M.init_here()
   local dest = vim.fn.getcwd()
   local existing = vim.fn.readdir(dest)

@@ -410,7 +410,7 @@ client attached, file contents reverted.
   immediately** whether or not the view is about to move.
 - **Two of neo-tree's nine default git markers are plain Unicode dingbats** --
   `added = "✚"` (U+271A) and `deleted = "✖"` (U+2716) -- and a Nerd Font does
-  not carry those. the monospace Nerd Font has every other symbol it uses and
+  not carry those. The Nerd Font on this machine has every other symbol and
   neither of these, so a file an agent had just *added* rendered as a tofu box.
   `plugins/ui.lua` overrides both with nf-fa glyphs. `menu_tree_spec` asserts
   every configured symbol is ASCII or in a Nerd Font private-use range, and
@@ -596,10 +596,28 @@ client attached, file contents reverted.
 
 ## House style
 
-**No brand names.** The docs say "a full graphical IDE" and "a dedicated
-database IDE", never a vendor's product name. This was asked for explicitly
-after a session added several; `~/src` and `~/code` stay
-only because they are real paths on this machine.
+**No product names.** The line is between a *technology* and a *registered
+product*. A framework, language or dependency is what the code works with and
+is named plainly: Spring Boot, Maven, Gradle, Flutter, SvelteKit, Neovim,
+LazyVim, jdtls, dadbod, neo-tree. A commercial product named as an influence
+or a point of comparison is not: the docs say "a full graphical IDE" and "a
+dedicated database IDE" instead. "Look what we took from these products" is
+precisely what must not be in here.
+
+The excuse that used to sit in this paragraph -- two product-derived directory
+names "stay only because they are real paths on this machine" -- was a rule and
+a loophole written in the same breath, and it was pointed out as such. Those
+names are gone: the default project roots are the generic `~/Projects`, `~/src`,
+`~/code`, `~/dev`, and a machine's own layout goes in the user's own config
+through `vim.g.kebab_project_roots`, which is not published.
+
+One narrow exception, which is not prose: an **identifier the software
+requires**. `.vscode/launch.json` is a path a project ships and this layer
+reads; `vscode-spring-boot-tools` and `java-debug-adapter` are package names
+mason installs. Those are passed verbatim or nothing works. A *font* is not
+such a case -- `menu_tree_spec` asks `fc-match` what the monospace family is
+rather than naming one, which is also the more honest test, since the font the
+terminal really uses is the only one whose coverage matters.
 
 **No real project names.** This repo is public, so nothing in it names any of
 the author's own or client projects -- not in the README, not in CLAUDE.md, not

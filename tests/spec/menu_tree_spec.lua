@@ -278,7 +278,7 @@ end)
 
 -- Two of neo-tree's nine default git markers are plain Unicode dingbats --
 -- `added = "✚"` (U+271A) and `deleted = "✖"` (U+2716) -- and a Nerd Font does
--- not carry those. the monospace Nerd Font has every other symbol it uses and
+-- not carry those. The Nerd Font on this machine has every other symbol and
 -- neither of these, so a file an agent had just *added* rendered as a tofu box.
 H.describe("the tree's glyphs", function()
   -- str2list, not utf8.codes: this is LuaJIT, which has no utf8 library.
@@ -359,15 +359,38 @@ H.describe("the tree's glyphs", function()
     end
   end)
 
+  ---The monospace family fontconfig resolves to, which is what the terminal
+  ---will be using unless it has been told otherwise.
+  ---@return string|nil
+  local function font_family()
+    if vim.fn.executable("fc-match") == 0 then
+      return nil
+    end
+    local override = vim.g.kebab_glyph_font
+    if type(override) == "string" and override ~= "" then
+      return override
+    end
+    local res = vim.system({ "fc-match", "monospace", "--format=%{family[0]}" }, { text = true }):wait(30000)
+    local family = vim.trim(res.stdout or "")
+    return family ~= "" and family or nil
+  end
+
   -- The real check, when the tooling is there: ask the installed font.
   H.it("uses glyphs this machine's font actually has", function()
     if vim.fn.executable("fc-list") == 0 then
       H.skip("fc-list is needed to inspect the font")
     end
-    local font = "the monospace Nerd Font"
+    -- Ask fontconfig which monospace font this machine resolves to, rather
+    -- than naming one: the font the terminal actually uses is the only one
+    -- whose glyph coverage matters, and hardcoding a vendor's font name put a
+    -- product name in the repository for no benefit.
+    local font = font_family()
+    if not font then
+      H.skip("fontconfig cannot say what the monospace font is")
+    end
     local probe = vim.system({ "fc-list", ":charset=F067", "family" }, { text = true }):wait(30000)
     if not (probe.stdout or ""):find(font, 1, true) then
-      H.skip(font .. " is not installed on this machine")
+      H.skip(font .. " has no Nerd Font glyphs, so this proves nothing")
     end
     local symbols = git_symbols()
     H.ok(not vim.tbl_isempty(symbols), "the symbols should be resolvable either way")

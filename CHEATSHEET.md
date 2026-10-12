@@ -33,7 +33,7 @@ Nothing here is from memory — every binding below was read out of the live con
 | | |
 |---|---|
 | `<leader>pn` | New Project (wizard) |
-| `:IdeInitHere` | Scaffold into the current folder (a graphical editor style) |
+| `:IdeInitHere` | Scaffold into the folder you already made |
 | `<leader>po` | Open Project (scans the configured project roots) |
 | `<leader>fp` | Recent projects |
 | `<leader>pr` | Restore session for this project |

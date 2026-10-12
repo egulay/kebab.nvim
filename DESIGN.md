@@ -225,12 +225,15 @@ Two entry points, because developers expect both:
 - `:IdeNewProject` — wizard: type → name → location, with type-specific steps
   (Spring Boot asks group id and dependencies and fetches from start.spring.io;
   Vite asks for a template).
-- `:IdeInitHere` — a graphical editor style: you already made and opened the folder, pick
+- `:IdeInitHere` — the other way round: you already made and opened the folder, pick
   a type and it fills it in.
 
-`discover()` scans `~/Projects`, `~/src`, `~/code` and
-`~/dev` for directories carrying a project marker, and labels each
-by kind. New projects default to `~/Projects` — note the capital P, which is
+`discover()` scans `~/Projects`, `~/src`, `~/code` and `~/dev` for directories
+carrying a project marker, and labels each by kind. Those are conventions
+rather than a guess at your layout: a graphical IDE tends to create a folder
+named after itself, and naming three of those here put vendor product names in
+a public repository. The machine's own directories go in the user's config,
+which is not published. New projects default to `~/Projects` — note the capital P, which is
 where this user keeps new work.
 
 It scans **two levels**, because the layout it kept missing is a root with a
