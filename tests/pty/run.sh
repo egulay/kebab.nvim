@@ -36,6 +36,12 @@ cat > "$KEBAB_DB_STORE" <<JSON
 JSON
 
 cat > "$work/child.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -120,6 +126,12 @@ check "with the rows pane below the statement"       "^win row=[1-9].*dbout"    
 # window, so reading its buffer lines shows blanks; what is asserted here is
 # the composited screen, cell by cell, which is what the terminal draws.
 cat > "$work/menuchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -178,6 +190,12 @@ check "the rows pager is in there"                       "SCREEN.*Rows" "$work/r
 # statement with something unmistakable, right-click, click "Run Statement",
 # and look for the result in the rows pane.
 cat > "$work/clickchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -239,6 +257,12 @@ check "clicking a menu row runs that entry" "clicked-the-menu" "$work/report.txt
 printf 'package main\nfunc main() {}\n' > "$work/a.go"
 printf 'package main\nfunc other() {}\n' > "$work/b.go"
 cat > "$work/tabchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -298,6 +322,12 @@ check "the statement window is not pinned"     "ft=sql fixbuf=false"  "$work/rep
 # dashboard. Four cases above this one failed on it too, and the suite's own
 # exit code was masked by piping it through `tail`.
 cat > "$work/splashchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -355,6 +385,12 @@ check "Run is bound on the rows pane too"            "KEYS rows.*C-CR"        "$
 # The bar reads "[ n next ]  [ p prev ]" and both the letter and a click work.
 # Only a real terminal can be clicked.
 cat > "$work/barchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 vim.g.kebab_db_store = vim.env.KEBAB_DB_STORE
 vim.g.kebab_db_sql_dir = vim.env.WORK .. "/sql"
 -- tell the driver where things are, so clicks are aimed and not guessed
@@ -413,6 +449,12 @@ check "clicking [ n next ] turns the page"    "LINE1.*page 2"           "$work/r
 # project that nobody asked for in Lua.
 mkdir -p "$work/projects"
 cat > "$work/wizchild.lua" <<'LUA'
+-- Ghost Mode follows files changed outside the editor -- including this repo,
+-- if anything is editing it while the suite runs. Measured: a statement pane
+-- holding kebab/cli.lua, a CHEATSHEET.md in another, two noice floats and the
+-- ghost badge, and three cases failing for a window count. tests/run.lua pins
+-- this off for the headless suite; the pty one needs it just as much.
+vim.g.kebab_follow_autostart = false
 package.path = vim.env.HERE .. "/?.lua;" .. package.path
 require("targets").publish(vim.env.TARGETS)
 -- The wizard offers the first configured project root. Pointing it at the
