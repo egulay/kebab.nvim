@@ -11,9 +11,24 @@
 # a pty and ~4 minutes, and is run by hand before a release.
 name: tests
 
+# Not on every push, on purpose.
+#
+# The ledger after a day of using it: this workflow found two things nothing
+# else would have -- a `cargo` that is on PATH and unusable (the runners ship
+# rustup with no default toolchain) and a skip being reported as
+# "table: 0x7f85..." on a runner with no gopls. Everything else it caught, the
+# clean-machine container caught first and in six minutes:
+# `tests/ci/docker.sh`. Meanwhile four red runs were failures in this
+# workflow's own harness rather than in the layer.
+#
+# So: a weekly run keeps the "does it still install for someone who is not
+# me" signal and the environment nobody here controls, a pull request gets
+# checked, and `gh workflow run tests` asks for it on demand. Run
+# ./tests/ci/docker.sh before pushing anything that touches the install.
 on:
-  push:
-    branches: [main]
+  schedule:
+    # Mondays, 05:00 UTC -- early enough that a break is known before the week
+    - cron: "0 5 * * 1"
   pull_request:
   workflow_dispatch:
 

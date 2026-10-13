@@ -193,9 +193,17 @@ Three things it surfaced that are worth keeping in mind for any new code here:
   with none of this machine on it (`tests/ci/docker.sh`), which is also what
   found the explorer that was never installed and the version floor that was
   wrong.
-- **CI exists**: `.github/workflows/ci.yml` runs the clean-machine install and
-  the suite on the floor (0.12) and on stable, twice, so an install that is
-  not idempotent fails too.
+- **CI exists**, on a weekly schedule rather than per push:
+  `.github/workflows/ci.yml` runs the clean-machine install and the suite on
+  the floor (0.12) and on stable, twice, so an install that is not idempotent
+  fails too. Also on pull requests and on demand (`gh workflow run tests`).
+
+  Why not per push: in a day of use it found two things nothing else would
+  have -- a `cargo` on PATH that cannot run, and a skip reported as
+  "table: 0x7f85..." -- while `tests/ci/docker.sh` found four product bugs
+  first and in six minutes, and four red runs were failures in the workflow's
+  own harness. The foreign environment is worth having weekly; it was not
+  worth a 6-12 minute wait per commit.
 - Still one machine, one terminal, one font for everything the pty suite
   covers: the mouse paths are verified on this terminal only.
 - Decide whether this ships as a plain LazyVim plugin (works for anyone) or

@@ -532,7 +532,16 @@ answer, which is the only way the wizards get exercised as a person uses them.
 throwaway container and runs the suite there. `./tests/run.sh` boots *your*
 config on purpose, which makes a local pass evidence about one machine; this
 is what catches the rest. It found an explorer that was never installed on a
-fresh config and a version floor that was wrong.
+fresh config and a version floor that was wrong — run it before pushing
+anything that touches the install.
+
+The same check runs on GitHub (`.github/workflows/ci.yml`) on a **weekly
+schedule**, on pull requests, and on demand with `gh workflow run tests` —
+deliberately not on every push. An environment nobody here controls is worth
+having: it is what revealed a `cargo` that is on PATH and unusable, because
+the runners ship rustup with no default toolchain. But the container above
+catches the same class of problem in six minutes without waiting for a
+runner, so paying for it on every push bought churn rather than signal.
 
 **The server one** starts SQL Server and Oracle in containers and drives this
 layer against them — driver download, connect, metadata, paging, explain, the
