@@ -13,7 +13,14 @@
 set -euo pipefail
 
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-NVIM=${NVIM:-nvim}
+# $KEBAB_NVIM, never $NVIM: Neovim exports **$NVIM** to every child process as
+# the RPC socket path of the running instance, so reading it meant that running
+# this installer from inside Neovim -- `:terminal ./setup.sh`, which is exactly
+# how someone would try it -- attempted to execute a socket and failed with
+# "/run/user/1000/nvim.116917.0 is not on PATH". `bin/kebab` always used
+# KEBAB_NVIM; this did not. Found by a spec whose child inherited the editor's
+# environment.
+NVIM=${KEBAB_NVIM:-nvim}
 CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/nvim
 BIN_DIR=${KEBAB_BIN_DIR:-$HOME/.local/bin}
 SPEC="$CONFIG/lua/plugins/kebab.lua"
@@ -46,7 +53,8 @@ Options:
   -h, --help     this
 
 Environment:
-  NVIM           the Neovim binary to use (default: nvim)
+  KEBAB_NVIM     the Neovim binary to use (default: nvim). Not \$NVIM --
+                 Neovim exports that to its children as a socket path
   KEBAB_BIN_DIR  where to link the kebab command (default: ~/.local/bin)
 USAGE
 }
@@ -113,16 +121,21 @@ confirm() {
 
 step "Checking the essentials"
 
-command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH. Install Neovim 0.11 or newer first."
+command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH. Install Neovim 0.12 or newer first."
 
 NVIM_VERSION=$("$NVIM" --version | head -1 | sed 's/^NVIM v//')
 say "neovim $NVIM_VERSION"
-# 0.11 is the floor: this layer uses vim.uv, vim._watch and vim.system.
+# 0.12 is the floor, and it is checked here because `kebab doctor` checking it
+# is too late: the plugins are installed by then. aerial returns from setup()
+# after a notify_once below 0.12 -- which deletes the command stub lazy made,
+# so :AerialToggle exists at startup and is gone afterwards -- and
+# refactoring.nvim raises on load, abandoning the rest of the startup. Both
+# were invisible here (0.12.5) and immediate in a container on 0.11.4.
 NVIM_MAJOR=${NVIM_VERSION%%.*}
 NVIM_REST=${NVIM_VERSION#*.}
 NVIM_MINOR=${NVIM_REST%%.*}
-if [ "${NVIM_MAJOR:-0}" -eq 0 ] && [ "${NVIM_MINOR:-0}" -lt 11 ]; then
-  die "Neovim 0.11 or newer is required (found $NVIM_VERSION)."
+if [ "${NVIM_MAJOR:-0}" -eq 0 ] && [ "${NVIM_MINOR:-0}" -lt 12 ]; then
+  die "Neovim 0.12 or newer is required (found $NVIM_VERSION)."
 fi
 
 command -v git >/dev/null 2>&1 || die "git is not on PATH."
@@ -154,6 +167,34 @@ if [ ! -e "$CONFIG/lua/config/lazy.lua" ]; then
   warn "$CONFIG/lua/config/lazy.lua not found -- this expects a LazyVim config."
   confirm "Carry on anyway?" || die "nothing was changed."
 fi
+# A config that does not belong to this HOME is refused.
+#
+# Why: testing this installer with a throwaway HOME is routine, and
+# $XDG_CONFIG_HOME is *not* derived from $HOME -- so `HOME=/tmp/fake ./setup.sh
+# --yes` in a shell that exports XDG_CONFIG_HOME writes the real config and
+# replaces the user's own spec. That happened: it cost a file holding this
+# machine's project roots and its JDBC timezone, and the only reason nothing
+# was lost is the .bak this script keeps. --yes must not wave that through,
+# which is why it is an error rather than a prompt.
+case "$CONFIG" in
+  "$HOME"/*) ;;
+  *)
+    if [ "${KEBAB_ALLOW_FOREIGN_CONFIG:-0}" != "1" ]; then
+      printf '\n'
+      warn "refusing to write a config outside your home directory."
+      say "  HOME:              $HOME"
+      say "  config it chose:   $CONFIG"
+      say "  (from \$XDG_CONFIG_HOME, which does not follow \$HOME)"
+      say ""
+      say "If that is really what you want:"
+      say "  XDG_CONFIG_HOME=\"\$HOME/.config\" ./setup.sh      # the usual fix"
+      say "  KEBAB_ALLOW_FOREIGN_CONFIG=1 ./setup.sh        # or allow it"
+      exit 1
+    fi
+    warn "writing a config outside \$HOME, because KEBAB_ALLOW_FOREIGN_CONFIG=1"
+    ;;
+esac
+
 say "config at $CONFIG"
 say "this clone is $REPO"
 
@@ -331,7 +372,9 @@ if [ "$DO_DOCTOR" -eq 1 ] && [ "$DRY" -eq 0 ]; then
   printf '\n'
   # Non-zero only means something required is missing; report it, do not abort,
   # because the layer itself is installed either way.
-  if NVIM="$NVIM" "$REPO/bin/kebab" doctor; then
+  # KEBAB_NVIM, not NVIM: bin/kebab reads that name, and handing a child
+  # $NVIM is the very confusion this rename was for.
+  if KEBAB_NVIM="$NVIM" "$REPO/bin/kebab" doctor; then
     :
   else
     warn "doctor reported something missing -- see above."

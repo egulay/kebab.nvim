@@ -21,6 +21,9 @@
 #
 # Environment:
 #   KEBAB_REPO     the git URL to clone (default: this clone's origin)
+#   KEBAB_NVIM     the Neovim binary to use (default: nvim). Not $NVIM:
+#                  Neovim exports that to its children as a socket path, so
+#                  running this from `:terminal` would try to execute it
 #   KEBAB_DIR      same as --dir
 set -euo pipefail
 
@@ -62,8 +65,8 @@ fi
 step "kebab.nvim"
 
 command -v git >/dev/null 2>&1 || die "git is not on PATH."
-command -v "${NVIM:-nvim}" >/dev/null 2>&1 \
-  || die "${NVIM:-nvim} is not on PATH. Install Neovim 0.11 or newer first."
+command -v "${KEBAB_NVIM:-nvim}" >/dev/null 2>&1 \
+  || die "${KEBAB_NVIM:-nvim} is not on PATH. Install Neovim 0.12 or newer first."
 
 # ------------------------------------------------------------------- the clone
 
@@ -116,7 +119,7 @@ if [ "$DRY" -eq 1 ]; then
   note "would run: nvim --headless \"+Lazy! sync\" +qa"
 else
   say "this takes a minute the first time"
-  "${NVIM:-nvim}" --headless -n "+Lazy! sync" +qa >/dev/null 2>&1 || true
+  "${KEBAB_NVIM:-nvim}" --headless -n "+Lazy! sync" +qa >/dev/null 2>&1 || true
   config=${XDG_CONFIG_HOME:-$HOME/.config}/nvim
   if [ -f "$config/lazy-lock.json" ]; then
     say "$(grep -c '": {' "$config/lazy-lock.json") plugins installed"

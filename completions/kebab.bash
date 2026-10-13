@@ -22,10 +22,17 @@ _kebab() {
 
   COMPREPLY=()
   local current=${COMP_WORDS[COMP_CWORD]}
+  # Filtered and escaped here rather than with `compgen -W`: that splits its
+  # word list on IFS, so a project directory called "sample app" arrived as
+  # two candidates and completing it inserted `sample` -- a name that does not
+  # exist. printf %q keeps a space inside one word.
   if ((${#candidates[@]})); then
-    while IFS= read -r line; do
-      COMPREPLY+=("$line")
-    done < <(compgen -W "$(printf '%s\n' "${candidates[@]}")" -- "$current")
+    local candidate
+    for candidate in "${candidates[@]}"; do
+      if [[ $candidate == "$current"* ]]; then
+        COMPREPLY+=("$(printf '%q' "$candidate")")
+      fi
+    done
   fi
   if ((files)); then
     while IFS= read -r line; do

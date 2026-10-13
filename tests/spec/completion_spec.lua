@@ -200,6 +200,35 @@ H.describe("the shell scripts", function()
     H.eq(0, res.code, res.stderr or "")
   end)
 
+  H.it("keeps a name with a space in one piece", function()
+    -- `compgen -W` splits its word list on IFS, so a project directory called
+    -- "sample app" arrived as two candidates and completing it inserted
+    -- `sample` -- a name that does not exist. The script filters and escapes
+    -- itself now; this drives bash to prove it.
+    local parent = H.tmpdir("complete-space")
+    vim.fn.mkdir(parent .. "/sample app", "p")
+    vim.fn.mkdir(parent .. "/plain-name", "p")
+    local script = ([[
+      set -e
+      export PATH=%s:$PATH
+      export KEBAB_PROJECT_ROOTS=%s
+      source %s
+      COMP_WORDS=(kebab open sam); COMP_CWORD=2; COMPREPLY=()
+      _kebab
+      printf '%%s
+' "${COMPREPLY[@]}"
+    ]]):format(
+      vim.fn.shellescape(root .. "/bin"),
+      vim.fn.shellescape(parent),
+      vim.fn.shellescape(root .. "/completions/kebab.bash"))
+    local res = vim.system({ "bash", "-c", script }, { text = true }):wait(60000)
+    H.eq(0, res.code, res.stderr or "")
+    local out = vim.trim(res.stdout or "")
+    H.eq(1, #vim.split(out, "\n", { trimempty = true }),
+      "one candidate, not two halves of a name: " .. out)
+    H.matches("sample\\ app", out, "the space has to survive as one word")
+  end)
+
   H.it("bash really completes, driven through bash's own machinery", function()
     -- `complete -F` and COMPREPLY, not the helper: what is asserted here is
     -- that pressing Tab would work, including the prefix filtering bash does.

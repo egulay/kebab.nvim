@@ -33,6 +33,139 @@ local function compiles(chunk)
   H.ok(fn, "generated Lua should compile: " .. tostring(err) .. "\n  " .. chunk)
 end
 
+-- setup.sh refuses a config that does not belong to the HOME it was given.
+--
+-- The reason this exists: testing an installer with a throwaway HOME is
+-- routine, and $XDG_CONFIG_HOME does not follow $HOME -- so `HOME=/tmp/x
+-- ./setup.sh --yes` in a shell that exports XDG_CONFIG_HOME wrote the real
+-- config and replaced the user's own spec, losing this machine's project roots
+-- and its JDBC timezone. The .bak the installer keeps is the only reason
+-- nothing was lost. --yes must not wave that through.
+H.describe("setup.sh and a config outside $HOME", function()
+  local setup = _G.KEBAB_TEST.root .. "/setup.sh"
+
+  ---@param env table
+  local function run_setup(env)
+    local res = vim.system({ setup, "--yes", "--dry-run" }, {
+      text = true,
+      env = env,
+    }):wait(120000)
+    return { code = res.code, out = (res.stdout or "") .. (res.stderr or "") }
+  end
+
+  H.it("refuses when XDG_CONFIG_HOME points outside the given HOME", function()
+    local home = H.tmpdir("setup-foreign")
+    local elsewhere = H.tmpdir("setup-elsewhere")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = elsewhere,
+      KEBAB_BIN_DIR = home .. "/bin",
+    })
+    H.eq(1, result.code, "it must refuse: " .. result.out)
+    H.matches("refusing to write a config outside", result.out)
+    H.matches(vim.pesc(elsewhere), result.out, "it should name the path it chose")
+    H.matches("KEBAB_ALLOW_FOREIGN_CONFIG", result.out, "and how to proceed anyway")
+  end)
+
+  H.it("allows it when asked explicitly", function()
+    local home = H.tmpdir("setup-allowed")
+    local elsewhere = H.tmpdir("setup-allowed-config")
+    vim.fn.mkdir(elsewhere .. "/nvim/lua/plugins", "p")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = elsewhere,
+      XDG_DATA_HOME = home .. "/.local/share",
+      XDG_CACHE_HOME = home .. "/.cache",
+      KEBAB_BIN_DIR = home .. "/bin",
+      KEBAB_ALLOW_FOREIGN_CONFIG = "1",
+    })
+    H.eq(0, result.code, result.out)
+    H.matches("KEBAB_ALLOW_FOREIGN_CONFIG=1", result.out, "and it says it is doing so")
+  end)
+
+  H.it("ignores $NVIM, which Neovim exports as a socket path", function()
+    -- Running the installer from inside the editor -- `:terminal ./setup.sh`,
+    -- which is exactly how someone tries it -- used to fail with
+    -- "/run/user/1000/nvim.116917.0 is not on PATH", because $NVIM is the
+    -- running instance's RPC socket and setup.sh read it as the binary.
+    -- KEBAB_NVIM is the documented knob and the one bin/kebab always used.
+    local home = H.tmpdir("setup-nvim-env")
+    vim.fn.mkdir(home .. "/.config/nvim/lua/plugins", "p")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = home .. "/.config",
+      XDG_DATA_HOME = home .. "/.local/share",
+      XDG_CACHE_HOME = home .. "/.cache",
+      KEBAB_BIN_DIR = home .. "/bin",
+      NVIM = "/run/user/1000/nvim.not-a-binary.0",
+    })
+    H.eq(0, result.code, "a socket in $NVIM must not stop the installer: " .. result.out)
+    H.falsy(result.out:find("not%-a%-binary"), "it should not try to run the socket")
+  end)
+
+  ---A fake Neovim on PATH that reports one version and does nothing else.
+  ---@param version string
+  ---@return string dir to prepend to PATH
+  local function fake_nvim(version)
+    local dir = H.tmpdir("fake-nvim-" .. version:gsub("%.", "-")) .. "/bin"
+    vim.fn.mkdir(dir, "p")
+    local path = dir .. "/nvim"
+    H.ok(require("kebab.fs").write_lines(path, {
+      "#!/usr/bin/env bash",
+      "case $1 in",
+      ("  --version) printf 'NVIM v%s\\n' ;;"):format(version),
+      "esac",
+    }), "the fake should be written")
+    vim.fn.setfperm(path, "rwxr-xr-x")
+    return dir
+  end
+
+  -- The floor the installer enforces has to be the floor `kebab doctor`
+  -- requires. It drifted: doctor asked for 0.12 (aerial returns from setup()
+  -- below it, which deletes the command stub lazy made, and refactoring raises
+  -- on load) while setup.sh still let 0.11 through and both installers said
+  -- "0.11 or newer" -- so the one check that runs *before* the plugins are
+  -- installed was the lenient one.
+  H.it("refuses a Neovim below the floor doctor requires", function()
+    local home = H.tmpdir("setup-old-nvim")
+    vim.fn.mkdir(home .. "/.config/nvim/lua/plugins", "p")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = home .. "/.config",
+      KEBAB_BIN_DIR = home .. "/bin",
+      PATH = fake_nvim("0.11.4") .. ":" .. vim.env.PATH,
+    })
+    H.eq(1, result.code, "0.11.4 must be refused: " .. result.out)
+    H.matches("0%.12 or newer is required", result.out)
+    H.matches("0%.11%.4", result.out, "and it should say what it found")
+  end)
+
+  H.it("accepts the floor itself", function()
+    local home = H.tmpdir("setup-floor-nvim")
+    vim.fn.mkdir(home .. "/.config/nvim/lua/plugins", "p")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = home .. "/.config",
+      KEBAB_BIN_DIR = home .. "/bin",
+      PATH = fake_nvim("0.12.0") .. ":" .. vim.env.PATH,
+    })
+    H.eq(0, result.code, "0.12.0 is the floor, not below it: " .. result.out)
+  end)
+
+  H.it("is happy when every XDG variable follows HOME", function()
+    local home = H.tmpdir("setup-clean")
+    vim.fn.mkdir(home .. "/.config/nvim/lua/plugins", "p")
+    local result = run_setup({
+      HOME = home,
+      XDG_CONFIG_HOME = home .. "/.config",
+      XDG_DATA_HOME = home .. "/.local/share",
+      XDG_CACHE_HOME = home .. "/.cache",
+      KEBAB_BIN_DIR = home .. "/bin",
+    })
+    H.eq(0, result.code, result.out)
+  end)
+end)
+
 H.describe("bin/kebab", function()
   H.it("is executable", function()
     H.ok(H.exists(kebab), "bin/kebab should exist")
