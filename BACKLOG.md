@@ -4,7 +4,7 @@ Ordered by how much friction it removes day to day.
 
 ## Helpers (all built)
 
-1. ~~**Add dependency**~~ Done: `:IdeAddDependency` / `<leader>pd` / Project
+1. ~~**Add dependency**~~ Done: `:IdeAddDependency` / `Space → p → d` / Project
    menu. Maven coordinates are written into `pom.xml` — version omitted when
    the spring-boot parent or `dependencyManagement` already manages it, and
    refused outright when nothing does, rather than writing a pom that will not
@@ -12,37 +12,37 @@ Ordered by how much friction it removes day to day.
    `org.springframework.boot:spring-boot-starter-data-jpa`. Flutter, Node and
    Python delegate to `flutter pub add`, `npm install` and `uv add`. Gradle is
    still unsupported and says so.
-2. ~~**Java code generation**~~ Done: `:IdeGenerate` / `<leader>cg` / Code ›
+2. ~~**Java code generation**~~ Done: `:IdeGenerate` / `Space → c → g` / Code ›
    Generate. Named entries for constructor, getters and setters, `toString`,
    `equals`/`hashCode`, override, delegate methods and organize imports. The
    action kinds are dot-separated (`source.generate.toString`), **not** the
    camelCase names in the jdt.ls jars -- guessing from those gave six dead
    entries, so the list was read back off a live server. See
    `languages/java.lua` for how to re-derive it.
-3. ~~**File templates**~~ Done: `:IdeNewFile` / `<leader>fn`. 20 templates
+3. ~~**File templates**~~ Done: `:IdeNewFile` / `Space → f → n`. 20 templates
    across Java, Python, Go, Rust, JS/TS and Svelte. The Java ones fill the
    package line in from the directory, and the JUnit template redirects itself
    to `src/test/java` with the same package, named after the file you were on.
-4. ~~**Scratch files**~~ Done: `:IdeScratch` / `<leader>fS`, with
-   `:IdeScratchList` / `<leader>fs` to reopen one. 13 kinds including `.http`
+4. ~~**Scratch files**~~ Done: `:IdeScratch` / `Space → f → S`, with
+   `:IdeScratchList` / `Space → f → s` to reopen one. 13 kinds including `.http`
    and `.sql`. They are real numbered files under `stdpath("data")`, so a
    language server attaches and they survive a restart -- and they can never be
    committed by accident.
-5. ~~**Project generators**~~ Done: `:IdeProjectFile` / `<leader>pf`. A
+5. ~~**Project generators**~~ Done: `:IdeProjectFile` / `Space → p → f`. A
    `.gitignore`, Dockerfile and CI workflow per language, plus `.editorconfig`
    and `README.md` everywhere. Only the ones that suit the project in hand are
    offered, and an existing file is never replaced without asking.
 6. ~~**Per-project run configurations**~~ Done: `.kebab/run.json` at the
    project root, with name, cmd, args, env and cwd, committed with the project.
    Exposed to overseer as a template *provider*, so they appear in
-   `<leader>oo` above the generic language tasks and are re-read on every
+   `Space → o → o` above the generic language tasks and are re-read on every
    search -- editing the file needs no restart. `:IdeRunConfigEdit` /
-   `<leader>oe` creates it with an example that suits the project;
-   `:IdeRunConfig` / `<leader>or` runs one.
+   `Space → o → e` creates it with an example that suits the project;
+   `:IdeRunConfig` / `Space → o → r` runs one.
 
 ## Ghost programming (built)
 
-`:IdeFollow` / `<leader>uf` / View › Follow External Edits. **On by default**; the keymap turns it off.
+`:IdeFollow` / `Space → u → f` / View › Follow External Edits. **On by default**; the keymap turns it off.
 
 When a file changes on disk, the view moves to it and the cursor to the first
 changed line, which is briefly highlighted. Watching is via `vim._watch`'s
@@ -150,8 +150,8 @@ a formatter -- which on reflection is the feature rather than a flaw.
 
 - ~~**The LSP and gitsigns shortcuts the menu advertises are not covered.**~~
   Done. `menu_shortcuts_spec` now opens a real tracked file for the
-  `<leader>gh*` keys and a real Go module for `gd`/`gI`/`gr`/`<leader>ca`/
-  `<leader>cr`, and asserts each is bound *in that buffer* once gitsigns or the
+  `Space → g → h → *` keys and a real Go module for `gd`/`gI`/`gr`/`Space → c → a`/
+  `Space → c → r`, and asserts each is bound *in that buffer* once gitsigns or the
   language server has attached. The BUFFER_LOCAL list still asserts they are
   not global; this asserts they exist where they are supposed to.
 

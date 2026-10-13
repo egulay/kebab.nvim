@@ -88,6 +88,39 @@ H.describe("the separator", function()
   end)
 end)
 
+H.describe("every document a reader opens", function()
+  -- The rule is not "the cheatsheet and the README": it is anywhere someone
+  -- lands. `<leader>DD` was still in BACKLOG.md and DESIGN.md, and it was
+  -- caught on the profile page -- "people gonna say wtf is this" -- after
+  -- being explained there as a counter-example, which is the same mistake
+  -- wearing a reason.
+  --
+  -- Lua snippets are exempt: a `vim.keymap.set` example has to stay
+  -- copy-pastable, and "Space -> D -> D" is not a key specification.
+  for _, name in ipairs({ "README.md", "CHEATSHEET.md", "BACKLOG.md", "DESIGN.md" }) do
+    H.it(name .. " shows no key specification jargon", function()
+      local path = _G.KEBAB_TEST.root .. "/" .. name
+      if not H.exists(path) then
+        H.skip(name .. " does not exist")
+      end
+      local bad = {}
+      local fence = false
+      for n, line in ipairs(vim.fn.readfile(path)) do
+        if line:sub(1, 3) == "```" then
+          fence = not fence
+        elseif not fence then
+          for token in line:gmatch("`([^`]+)`") do
+            if token:lower():find("leader") then
+              bad[#bad + 1] = ("%d: %s"):format(n, token)
+            end
+          end
+        end
+      end
+      H.eq({}, bad, "write what the user presses, e.g. `Space → D → D`")
+    end)
+  end
+end)
+
 H.describe("the README", function()
   -- Same rule as the cheatsheet: a shortcut shown to a reader is written as
   -- the keys they press. Lua snippets are exempt -- a `vim.keymap.set` example

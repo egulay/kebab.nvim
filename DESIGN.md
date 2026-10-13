@@ -76,7 +76,7 @@ its spec, so it has to be requireable on its own.
 
 The Generate menu a graphical IDE has. jdtls already implemented all of it as
 LSP *source* code actions; what was missing was discoverability, since they were
-buried in `<leader>ca` among every quick-fix.
+buried in `Space → c → a` among every quick-fix.
 
 The kinds are dot-separated -- `source.generate.toString` -- and **not** the
 camelCase names that appear as field names inside the jdt.ls jars. Guessing from
@@ -131,7 +131,7 @@ and environment, in `.kebab/run.json` and committed so the team gets them too.
 They reach overseer as a template **provider** rather than registered templates,
 which is what makes them re-read on every search: editing the file takes effect
 without a restart, and switching project picks up the new one. Their priority is
-above the generic tasks, so yours come first in `<leader>oo`.
+above the generic tasks, so yours come first in `Space → o → o`.
 
 A malformed file is reported, not ignored. Dropping a colleague's configuration
 silently because of a typo is worse than saying what is wrong.
@@ -190,7 +190,7 @@ two means this regressed.
 ## `plugins/python.lua`
 
 `basedpyright` is pointed at the project's own `.venv`/`venv`/`.env` in
-`before_init`, so imports resolve without running `<leader>cv` first.
+`before_init`, so imports resolve without running `Space → c → v` first.
 
 Note that LazyVim defaults `lazyvim_python_lsp` to `pyright`, and that setting
 actively *disables* basedpyright — the symptom is a Python buffer with only
@@ -206,7 +206,7 @@ configs can live in the repo and travel with it.
 
 ## `explorer.lua`
 
-neo-tree ships as a toggle (`<leader>e`); this keeps it open on the left like
+neo-tree ships as a toggle (`Space → e`); this keeps it open on the left like
 a graphical IDE's project pane, with focus staying in the editor.
 
 Registered from the plugin spec's `init`, which lazy runs during setup —
@@ -237,7 +237,7 @@ which is not published. New projects default to `~/Projects` — note the capita
 where this user keeps new work.
 
 It scans **two levels**, because the layout it kept missing is a root with a
-grouping directory in it (`~/Projects/work/<project>`): the group carries no
+grouping directory in it (`~ → / → P → r → o → j → e → c → t → s → / → w → o → r → k → / → project`): the group carries no
 marker of its own, so a one-level scan treated it as a dead end. Going deeper
 needs three guards, and the scan has all three — a directory that is itself a
 project is recorded and *not* descended into (a checkout with a vendored
@@ -276,7 +276,7 @@ answer to "how do I open the database explorer" was "start Neovim, then press
 a key" -- which is not how you start a dedicated database IDE, and the question
 was asked three times. It also owns the one thing Lua cannot do: a connection
 reads its password from an environment variable, and nothing can add to the
-editor's environment once Neovim has started, so `--env <file>` (or
+editor's environment once Neovim has started, so `- → - → e → n → v →   → file` (or
 `$KEBAB_DB_ENV`) is sourced by the shell script before it execs the editor.
 Refusing an unreadable env file is deliberate: starting anyway opens the IDE
 with every connection unable to authenticate, which reads as a broken database
@@ -292,7 +292,7 @@ graphical database IDE does -- did nothing at all.
 
 So the tree stays and this module owns opening a table: the statement in a pane
 top right, its rows under it, cursor left on the statement so the next thing
-you type edits the query. `<leader>S` there runs the statement under the cursor
+you type edits the query. `Space → S` there runs the statement under the cursor
 and refreshes the rows pane; it is bound buffer-locally so it beats dadbod's
 own exec, which would open a second result window.
 
@@ -322,7 +322,7 @@ Two mistakes worth not repeating. A table of functions parked on a menu's list
 (`menu.actions = {...}`) made the plugin index a function and the tree menu
 never opened at all -- helpers hang off a metatable now, and `menu_open_spec`
 opens every menu and asserts its entries were drawn. And an entry that
-advertises a key must declare it canonically (`<leader>Dq`), not as the text a
+advertises a key must declare it canonically (`Space → D → q`), not as the text a
 person reads ("Space D q"): `kebab.keys.humanise` produces the second from the
 first, and the sweep checks the first against the real mappings.
 
@@ -506,16 +506,16 @@ The tests check the result with a real XML parser rather than a substring match.
 
 Three things it has to get right:
 
-- **The right `<dependencies>`.** A plain search finds the one inside
-  `<dependencyManagement>` first on every Spring pom, and adding there declares
+- **The right `dependencies`.** A plain search finds the one inside
+  `dependencyManagement` first on every Spring pom, and adding there declares
   a managed version without depending on anything. `find_dependencies_block`
-  scans tags and takes the block whose parent is `<project>`.
+  scans tags and takes the block whose parent is `project`.
 - **Whether a version is needed.** Under `spring-boot-starter-parent` a starter
   must *not* carry one, or it overrides the curated set. Anything else without a
   version only resolves if `dependencyManagement` covers it, so that case is
   refused with a reason instead of writing an unbuildable pom.
 - **Indentation.** Taken from the block the scanner found. Deriving it by
-  matching `<dependencies>` picks up dependencyManagement's copy, which is one
+  matching `dependencies` picks up dependencyManagement's copy, which is one
   level deeper, and the new entry landed at 16 spaces in a 12-space file.
 
 A bare name expands to a Spring Boot starter, because `data-jpa` is what you
@@ -602,7 +602,7 @@ nil for any non-tree window. The first version asserted on that nil, so
 "New File" threw and "Revert" silently did nothing.
 
 Revert is implemented by hand rather than calling neo-tree's `git_revert_file`,
-because that runs `git checkout HEAD -- <path>`, which **ignores untracked
+because that runs `g → i → t →   → c → h → e → c → k → o → u → t →   → H → E → A → D →   → - → - →   → path`, which **ignores untracked
 files**. Reverting a newly added file did nothing and said nothing. The
 replacement inspects `git status` for the selected node, partitions tracked
 from untracked, asks once with a message stating exactly what will happen, then
@@ -637,7 +637,7 @@ has to say how it can be verified.
 The revert `menus/tree.lua` performs, split out so it can be tested against a
 real repository instead of only through a selected node in a tree window.
 
-`git checkout HEAD -- <path>` ignores untracked files, so reverting a newly
+`g → i → t →   → c → h → e → c → k → o → u → t →   → H → E → A → D →   → - → - →   → path` ignores untracked files, so reverting a newly
 added file looked like it did nothing — and the first investigation missed it
 because `git diff` was clean. `revert_plan()` splits porcelain status into
 tracked and untracked, `apply_revert()` restores the former and deletes the
