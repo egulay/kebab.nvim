@@ -310,7 +310,13 @@ if [ "$DO_PATH" -eq 1 ]; then
   # offers project types and connections rather than only the command names.
   # @see lua/kebab/complete.lua
   if [ "$DRY" -eq 0 ]; then
-    "$NVIM" -n --headless --cmd "set runtimepath+=$REPO" \
+    # -u NONE --noplugin: the cache needs this layer's own modules and nothing
+    # else, and booting the *user's* config here is a first start -- which on a
+    # fresh install means lazy.nvim installing seventy plugins and mason
+    # starting on its own list, from an installer step that only wanted to
+    # write a 43-line file. A leash too, because a step that can hang must not.
+    timeout 60 "$NVIM" -n --headless -u NONE --noplugin \
+      --cmd "set runtimepath+=$REPO" \
       -c "lua require('kebab.complete').write()" -c "qa!" >/dev/null 2>&1 \
       && say "completion cache written" \
       || warn "could not write the completion cache; it will fill in on first use"

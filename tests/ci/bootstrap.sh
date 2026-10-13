@@ -57,6 +57,19 @@ git config --global user.email "ci@example.com"
 git config --global user.name "kebab ci"
 git config --global init.defaultBranch main
 
+# Exported before anything boots an editor -- including setup.sh, which warms
+# the shell-completion cache with a Neovim of its own. Setting it later meant
+# that boot installed the full 31-package list, had it abandoned on exit, and
+# left mason's bin full of half-installed binaries for the prune below to run.
+#
+# A short, known list -- and then we wait for it. Mason's installs are
+# abandoned when the editor exits and what survives differs every run; but
+# installing *nothing* is worse, because then nothing enables the language
+# server either and the specs that need one wait out their whole attach
+# budget. gopls is the only server the suite actually needs.
+# @see lua/kebab/plugins/mason.lua
+export KEBAB_MASON_ONLY="${KEBAB_MASON_ONLY-gopls}"
+
 say "neovim"
 nvim --version | head -2 || fail "nvim is not on PATH"
 # The floor, stated here as well as in doctor: below it aerial and
@@ -82,13 +95,6 @@ test -f "$XDG_CONFIG_HOME/nvim/lua/plugins/kebab.lua" \
 test -x "$work/.local/bin/kebab" \
   || fail "setup.sh did not put kebab on PATH"
 
-# A short, known list -- and then we wait for it. Mason's installs are
-# abandoned when the editor exits and what survives differs every run; but
-# installing *nothing* is worse, because then nothing enables the language
-# server either and the specs that need one wait out their whole attach
-# budget. gopls is the only server the suite actually needs.
-# @see lua/kebab/plugins/mason.lua
-export KEBAB_MASON_ONLY="${KEBAB_MASON_ONLY-gopls}"
 
 say "installing the plugins (this is where a bad pin shows up)"
 nvim --headless -n "+Lazy! sync" +qa 2>&1 | tail -20
@@ -146,7 +152,13 @@ say "pruning anything mason left half-installed"
 pruned=0
 for binary in "$XDG_DATA_HOME"/nvim/mason/bin/*; do
   [ -e "$binary" ] || continue
-  if ! "$binary" --version >/dev/null 2>&1 && ! "$binary" version >/dev/null 2>&1; then
+  # `timeout` and `</dev/null`, both load-bearing: a language server handed an
+  # unknown flag commonly ignores it, starts up, and blocks reading stdin --
+  # which hung this loop for 22 minutes until the job's own timeout killed it,
+  # reported as "The operation was canceled" with no clue which binary did it.
+  # Never run an unknown binary without a leash and a closed stdin.
+  if ! timeout 5 "$binary" --version </dev/null >/dev/null 2>&1 \
+    && ! timeout 5 "$binary" version </dev/null >/dev/null 2>&1; then
     rm -f "$binary"
     pruned=$((pruned + 1))
     printf '  removed %s (it does not run)\n' "$(basename "$binary")"
