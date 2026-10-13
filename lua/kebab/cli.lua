@@ -632,6 +632,17 @@ function M.doctor()
   add("Required", "file explorer: neo-tree", explorer_ok, explorer_detail,
     { hint = not explorer_ok and "run setup.sh again, or add the extra to lazyvim.json" or nil })
 
+  -- Shell completion is a convenience, so it is optional -- but a missing
+  -- link is invisible otherwise: pressing Tab simply does nothing, which
+  -- reads as "this CLI has no completion" rather than "it is not linked".
+  local shell = require("kebab.complete").installed()
+  add("Optional", "shell completion", nil, shell.detail, {
+    present = shell.ok,
+    why = "completes commands, project types and saved connections on Tab",
+    without = "Tab does nothing for the kebab command",
+    hint = not shell.ok and "./setup.sh (it links one file per shell)" or nil,
+  })
+
   for _, tool in ipairs(REQUIRED) do
     local path = vim.fn.exepath(tool.exe)
     add("Required", "tool: " .. tool.exe, path ~= "",
@@ -832,6 +843,13 @@ end
 ---Print lines and quit with a sensible exit code. Used by the headless
 ---subcommands, where stdout is the whole point.
 function M.print_and_quit(lines, ok)
+  -- Refresh the shell completion cache on the way out. Every command that
+  -- reaches here has already paid for an editor, so this costs a file write --
+  -- and it means ordinary use keeps completion current, including after a
+  -- language is added. @see kebab.complete
+  pcall(function()
+    require("kebab.complete").write()
+  end)
   for _, l in ipairs(lines) do
     io.write(l .. "\n")
   end

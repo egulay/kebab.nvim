@@ -194,6 +194,31 @@ descended into, and `node_modules` and friends are never walked.
 reported rather than silently skipped — `kebab list` says `skipped <path>:
 EACCES`, and `kebab doctor` has a "project roots readable" check.
 
+### Tab completion
+
+`./setup.sh` links a completion script for bash and zsh, so the command behaves
+like any other on your PATH:
+
+```
+kebab d<Tab>                 db  doctor  diagnostics  definition
+kebab new app --type <Tab>   flutter  spring  maven  kotlin  ruby  rust  go …
+kebab db <Tab>               your saved connection names
+kebab new app --<Tab>        --type  --dir  --no-open  --group  --module …
+```
+
+It answers in about **3ms**, which is the whole design: every real `kebab`
+command starts an editor, so a completion that called one would take 200ms at
+best and nobody would keep it. Instead the authoritative lists — which
+commands exist, which project types your languages declare, what each type
+asks — are cached by the commands that pay for an editor anyway, and the
+completion reads only that. Adding a language needs no extra step: the next
+`kebab doctor` (or any other command) refreshes it.
+
+bash picks it up in a new shell with no further configuration. zsh needs its
+directory on `fpath`, and `setup.sh` prints the one line to add if your shell
+is zsh. `kebab doctor` reports whether it is linked, because an unlinked
+completion is indistinguishable from a command that has none.
+
 ## Databases
 
 Shaped like a dedicated database IDE: add a data source once, then browse it

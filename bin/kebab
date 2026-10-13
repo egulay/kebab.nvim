@@ -45,6 +45,10 @@
 #                                       ~200ms, and jdtls indexes only once)
 #   kebab --server <path> <query>...    ask that instance
 #
+#   kebab <Tab>                shell completion: commands, project types,
+#                              saved connections, the prompts a type asks.
+#                              `./setup.sh` links it for bash and zsh.
+#
 #   kebab list                 list the projects found under the known roots
 #   kebab types                list the project types that can be created
 #   kebab doctor               check the environment
@@ -61,6 +65,162 @@ VERSION="0.1.0"
 NVIM="${KEBAB_NVIM:-nvim}"
 
 die() { printf 'kebab: %s\n' "$1" >&2; exit 1; }
+
+# Tab completion is answered before anything else, and *before* the check for
+# an editor below: completing `kebab` on a machine where Neovim is missing
+# should still work, and the fast path must not pay for a single thing it does
+# not need. `KEBAB_NVIM=/nonexistent kebab __complete 1 kebab` is the test.
+if [ "${1-}" = "__complete" ]; then
+  # Tab completion, answered without starting an editor.
+  #
+  #   kebab __complete <cword> <word>...
+  #
+  # One candidate per line. Three sentinels ask the shell to do what only it
+  # can: __files, __dirs, __nothing.
+  #
+  # Nothing here parses Lua or guesses: the authoritative lists come from
+  # the cache `kebab.complete` writes on the way out of every command that
+  # boots an editor. A missing cache degrades to the command names, which is
+  # the common case on a fresh install until the first `kebab doctor`.
+  #
+  # Why not call `kebab list` or `kebab types` from here: each is an editor
+  # start -- 200ms at best -- and a completion that slow is one nobody keeps
+  # installed. `KEBAB_NVIM=/nonexistent kebab __complete 1 kebab` is a test
+  # that this path never needs one.
+  shift
+  cword=${1-1}
+  shift || true
+  words=("$@")
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim/kebab/completion"
+
+  # section -> values, from the cache.
+  #
+  # Every test here is an `if`, not `[ ... ] && ...`: under `set -e` a false
+  # test as the last command of a line exits the script, which is how this
+  # block first answered nothing at all -- `[ 1 -lt 1 ]` for a one-word line
+  # ended it before a single candidate was printed. Same trap as install.sh.
+  cache_values() {
+    if [ ! -r "$cache" ]; then
+      return 0
+    fi
+    while IFS=$'\t' read -r section value; do
+      if [ "$section" = "$1" ]; then
+        printf '%s\n' "$value"
+      fi
+    done < "$cache"
+  }
+
+  commands=$(cache_values command)
+  if [ -z "$commands" ]; then
+    # No cache yet. These are the commands `bin/kebab` dispatches; the
+    # queries come from kebab.agent and are deliberately not duplicated,
+    # so an uncached shell completes the subcommands and nothing else.
+    commands=$'open\nnew\ntypes\ndb\nlist\ndoctor\nserve\nhelp\nversion'
+  fi
+
+  # The word being completed, and the first non-flag word before it.
+  current=""
+  if [ "$cword" -lt "${#words[@]}" ]; then
+    current=${words[$cword]}
+  fi
+  previous=""
+  if [ "$cword" -ge 1 ] && [ "$((cword - 1))" -lt "${#words[@]}" ]; then
+    previous=${words[$((cword - 1))]}
+  fi
+  subcommand=""
+  for ((i = 1; i < cword && i < ${#words[@]}; i++)); do
+    case "${words[$i]}" in
+      --server) ((i++)) ;;
+      -*) : ;;
+      *) subcommand=${words[$i]}; break ;;
+    esac
+  done
+
+  # A value for the option just typed, whatever the subcommand.
+  case "$previous" in
+    --type) printf '%s\n' "$(cache_values type)"; exit 0 ;;
+    --dir) printf '__dirs\n'; exit 0 ;;
+    --env | --socket | --server) printf '__files\n'; exit 0 ;;
+  esac
+
+  if [ -z "$subcommand" ]; then
+    printf '%s\n' "$commands"
+    exit 0
+  fi
+
+  case "$subcommand" in
+    open)
+      # Project names, which are directory names under the configured roots.
+      # Listed rather than validated: checking each for a project marker is
+      # the registry's job and would mean reading every candidate, and an
+      # over-offered directory costs one clear "no project called x".
+      # $KEBAB_PROJECT_ROOTS wins over the cached roots, the same precedence
+      # the layer itself uses: a variable set for one invocation is more
+      # specific than a config file.
+      if [ -n "${KEBAB_PROJECT_ROOTS:-}" ]; then
+        roots=${KEBAB_PROJECT_ROOTS//:/$'\n'}
+      else
+        roots=$(cache_values root)
+      fi
+      while IFS= read -r root; do
+        if [ -n "$root" ] && [ -d "$root" ]; then
+          for entry in "$root"/*/; do
+            if [ -d "$entry" ]; then
+              printf '%s\n' "$(basename "$entry")"
+            fi
+          done
+        fi
+      done <<< "$roots"
+      ;;
+    new)
+      if [ -n "$current" ] && [ "${current#--}" != "$current" ]; then
+        printf '%s\n' "--type" "--dir" "--no-open"
+        while IFS= read -r answer; do
+          if [ -n "$answer" ]; then
+            printf -- '--%s\n' "$answer"
+          fi
+        done <<< "$(cache_values answer | sort -u)"
+      else
+        # the name is the user's to invent
+        printf '__nothing\n'
+      fi
+      ;;
+    types)
+      printf -- '--prompts\n'
+      ;;
+    db)
+      # Saved connection names, read straight out of the store: no editor,
+      # and no `jq` either, since that is optional here.
+      local_store=${KEBAB_DB_STORE:-$(cache_values store | head -n 1)}
+      : "${local_store:=${XDG_DATA_HOME:-$HOME/.local/share}/nvim/kebab/connections.json}"
+      if [ -r "$local_store" ]; then
+        # grep -o, not sed: `.*"name"` is greedy, so on a *single line* of
+        # JSON -- which is exactly what the store looks like when `jq` is not
+        # installed -- only the last connection was ever offered. Found by the
+        # spec, which encodes its fixture compactly.
+        grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$local_store" \
+          | sed 's/.*"\([^"]*\)"$/\1/'
+      fi
+      printf -- '--env\n'
+      ;;
+    serve)
+      printf -- '--socket\n'
+      ;;
+    diagnostics | symbols)
+      printf '__files\n'
+      printf -- '--json\n--exit-code\n'
+      ;;
+    definition | references | hover)
+      # file:line:col -- the path is the part a shell can help with
+      printf '__files\n'
+      printf -- '--json\n'
+      ;;
+    *)
+      printf '__files\n'
+      ;;
+  esac
+  exit 0
+fi
 
 command -v "$NVIM" >/dev/null 2>&1 || die "$NVIM is not on PATH"
 

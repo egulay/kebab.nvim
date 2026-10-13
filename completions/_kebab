@@ -1,0 +1,32 @@
+#compdef kebab
+#
+# zsh completion for kebab. The candidates come from `kebab __complete`, the
+# same fast path bash uses -- it reads a cache instead of starting an editor.
+#
+# zsh's `words` is 1-based and `CURRENT` indexes it from 1, while the helper
+# speaks bash's 0-based COMP_CWORD, hence the subtraction.
+_kebab() {
+  local line files=0 dirs=0
+  local -a candidates
+  while IFS= read -r line; do
+    case $line in
+      __files) files=1 ;;
+      __dirs) dirs=1 ;;
+      __nothing) ;;
+      "") ;;
+      *) candidates+=("$line") ;;
+    esac
+  done < <(kebab __complete $((CURRENT - 1)) "${words[@]}" 2>/dev/null)
+
+  if (( ${#candidates} )); then
+    compadd -a candidates
+  fi
+  if (( files )); then
+    _files
+  fi
+  if (( dirs )); then
+    _files -/
+  fi
+}
+
+_kebab "$@"

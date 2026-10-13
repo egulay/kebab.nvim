@@ -258,6 +258,65 @@ if [ "$DO_PATH" -eq 1 ]; then
   esac
 fi
 
+# ------------------------------------------------------- shell completion
+
+if [ "$DO_PATH" -eq 1 ]; then
+  step "Teaching your shell to complete kebab"
+
+  # Linked, not copied: the clone is the source of truth everywhere else in
+  # this installer, and a copy would go stale the moment the completion
+  # changes.
+  BASH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+  ZSH_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
+
+  link_completion() { # source target shell
+    local src=$1
+    local dst=$2
+    local shell=$3
+    if [ -L "$dst" ] && [ "$(readlink -f -- "$dst")" = "$(readlink -f -- "$src")" ]; then
+      say "$shell: already linked"
+      return
+    fi
+    if [ -e "$dst" ]; then
+      warn "$dst already exists."
+      if confirm "Replace it?"; then
+        run ln -sfn -- "$src" "$dst"
+        say "$shell: relinked"
+      else
+        say "$shell: left alone -- link it yourself: ln -s $src $dst"
+      fi
+      return
+    fi
+    run mkdir -p -- "$(dirname -- "$dst")"
+    run ln -s -- "$src" "$dst"
+    say "$shell: linked $dst"
+  }
+
+  link_completion "$REPO/completions/kebab.bash" "$BASH_DIR/kebab" bash
+  link_completion "$REPO/completions/_kebab" "$ZSH_DIR/_kebab" zsh
+
+  # zsh only looks in directories on its fpath, and that one is not there by
+  # default -- so say the single line that fixes it rather than leaving a file
+  # nothing reads.
+  case "${SHELL##*/}" in
+    zsh)
+      say "add this to ~/.zshrc if completion does not work after a restart:"
+      say "    fpath=($ZSH_DIR \$fpath)"
+      ;;
+  esac
+  say "open a new shell, then: kebab <Tab>"
+
+  # Warm the cache the completion reads, so the first <Tab> in a new shell
+  # offers project types and connections rather than only the command names.
+  # @see lua/kebab/complete.lua
+  if [ "$DRY" -eq 0 ]; then
+    "$NVIM" -n --headless --cmd "set runtimepath+=$REPO" \
+      -c "lua require('kebab.complete').write()" -c "qa!" >/dev/null 2>&1 \
+      && say "completion cache written" \
+      || warn "could not write the completion cache; it will fill in on first use"
+  fi
+fi
+
 # ----------------------------------------------------------------- doctor
 
 if [ "$DO_DOCTOR" -eq 1 ] && [ "$DRY" -eq 0 ]; then
